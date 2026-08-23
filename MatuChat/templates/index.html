@@ -1,0 +1,113 @@
+<!doctype html>
+<!--
+MatuChat - arayuz sablonu
+Copyright (C) 2026 lucklyeeg
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version. See the LICENSE file for details.
+
+SPDX-License-Identifier: GPL-3.0-or-later
+-->
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MatuChat</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<div class="crt"></div>
+
+<div class="window">
+  <div class="titlebar">
+    <span class="tb-dots"><i></i><i></i><i></i></span>
+    <h1>MatuChat <small>v1.0</small></h1>
+    <span class="tb-stripes"></span>
+    <span class="tb-badge" id="roomBadge">4 AI</span>
+  </div>
+
+  <div class="layout">
+
+    <aside class="panel roster">
+      <div class="panel-head">GRUPTAKILER</div>
+      <div id="agentList" class="agent-list"></div>
+      <div class="panel-head">GRUP AYARI</div>
+      <div class="room-controls">
+        <button class="pxbtn wide send" id="settingsBtn">API AYARLARI</button>
+        <button class="pxbtn wide" id="freezeBtn">SOHBETI DURDUR</button>
+        <button class="pxbtn wide" id="autoBtn" data-on="1">OTONOM: ACIK</button>
+        <button class="pxbtn wide" id="tempoBtn">TEMPO: NORMAL</button>
+        <button class="pxbtn wide" id="webBtn">INTERNET: ACIK</button>
+        <div class="drama">
+          <span class="drama-label">GERGINLIK</span>
+          <div class="drama-bar" id="dramaBar"></div>
+          <div class="drama-btns">
+            <button class="pxbtn tiny" data-drama="-1">-</button>
+            <button class="pxbtn tiny" data-drama="1">+</button>
+          </div>
+        </div>
+        <button class="pxbtn wide ghost" id="resetBtn">SOHBETI TEMIZLE</button>
+      </div>
+    </aside>
+
+    <main class="panel stage">
+      <div class="stage-head">
+        <div class="ghead-faces" id="headFaces"></div>
+        <div class="ghead-text">
+          <div class="gname" id="groupName">ORTAK ODA</div>
+          <div class="gmembers" id="memberLine">grup bos</div>
+        </div>
+        <div class="ghead-topic"><span class="live-dot"></span><span id="topicLine">konu serbest</span></div>
+      </div>
+
+      <div id="log" class="log"></div>
+
+      <div id="typing" class="typing hidden">
+        <span class="tname"></span> yaziyor <b>...</b>
+      </div>
+
+      <div class="composer">
+        <div class="setup hidden" id="setupHint">
+          Grupta anahtari girilmis karakter yok. Soldaki <b>ANAHTAR</b> dugmesinden bir
+          API anahtari gir, grup kendiliginden konusmaya baslasin.
+        </div>
+        <div class="quick">
+          <button class="pxbtn" id="fitneBtn">FITNE AT</button>
+          <button class="pxbtn" id="topicBtn">KONU AC</button>
+          <button class="pxbtn" id="pokeBtn">BIRINI DURT</button>
+        </div>
+        <form id="sayForm" autocomplete="off">
+          <input id="sayInput" type="text" maxlength="500" placeholder="gruba yaz... (@ISIM ile birine don)">
+          <button class="pxbtn send" type="submit">GONDER</button>
+        </form>
+      </div>
+    </main>
+  </div>
+
+  <div class="statusbar">
+    <span id="statusText">hazir</span>
+    <span class="grow"></span>
+    <span>flask + pixel</span>
+  </div>
+</div>
+
+<div class="overlay hidden" id="overlay">
+  <div class="window modal" id="modal">
+    <div class="titlebar small">
+      <h1 id="modalTitle">AYAR</h1>
+      <span class="tb-stripes"></span>
+      <button class="pxbtn tiny close" id="modalClose">X</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
