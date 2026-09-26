@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# MatuChat baslatici (macOS / Linux)
 set -e
 cd "$(dirname "$0")"
 

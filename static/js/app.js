@@ -1,14 +1,3 @@
-/*
-MatuChat - tarayici arayuzu
-Copyright (C) 2026 lucklyeeg
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version. See the LICENSE file for details.
-
-SPDX-License-Identifier: AGPL-3.0-or-later
-*/
 const log = document.getElementById("log");
 const agentList = document.getElementById("agentList");
 const typingBox = document.getElementById("typing");
@@ -39,6 +28,7 @@ const PROVIDERS = [
 ];
 
 let since = 0;
+let epoch = null;
 let lastAuthor = null;
 let agents = [];
 let bases = {};
@@ -55,7 +45,7 @@ function esc(s) {
 }
 
 function highlight(text) {
-  return esc(text).replace(/@([A-Za-zÇĞİÖŞÜçğıöşü]{2,})/g, '<span class="at">@$1</span>');
+  return esc(text).replace(/@([A-Za-z0-9ÇĞİÖŞÜçğıöşü][A-Za-z0-9ÇĞİÖŞÜçğıöşü-]+)/g, '<span class="at">@$1</span>');
 }
 
 function findAgent(id) {
@@ -67,7 +57,7 @@ function atBottom() {
 }
 
 function renderRoster() {
-  const sig = JSON.stringify(agents.map((a) => [a.id, a.enabled, a.status, a.provider_label, a.personality_label]));
+  const sig = JSON.stringify(agents.map((a) => [a.id, a.enabled, a.has_key, a.status, a.provider_label, a.personality_label]));
   if (sig === rosterSig) return;
   rosterSig = sig;
   agentList.innerHTML = "";
@@ -168,28 +158,74 @@ function renderDrama() {
 
 async function post(url, body) {
   try {
-    await fetch(url, {
+    const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body || {}),
     });
+    let data = {};
+    try {
+      data = await res.json();
+    } catch (e) {}
+    return { ok: res.ok && data.ok !== false, ...data };
   } catch (e) {
     statusText.textContent = "sunucuya ulasilamiyor";
+    return { ok: false, error: "sunucuya ulasilamiyor" };
   }
 }
 
+function clearLog() {
+  log.innerHTML = "";
+  lastAuthor = null;
+  since = 0;
+}
+
+let polling = false;
+let pollAgain = false;
+let pollTimer = null;
+
 async function poll() {
+  if (polling) {
+    pollAgain = true;
+    return;
+  }
+  polling = true;
+  clearTimeout(pollTimer);
   try {
-    const res = await fetch("/api/state?since=" + since);
+    await pollOnce();
+  } finally {
+    polling = false;
+    if (pollAgain) {
+      pollAgain = false;
+      poll();
+    } else {
+      pollTimer = setTimeout(poll, 1200);
+    }
+  }
+}
+
+async function pollOnce() {
+  try {
+    const res = await fetch("/api/state?since=" + since, { cache: "no-store" });
     const data = await res.json();
+    if (data.epoch !== epoch) {
+      const first = epoch === null;
+      epoch = data.epoch;
+      if (!first) {
+        clearLog();
+        pollAgain = true;
+        return;
+      }
+    }
     agents = data.agents;
     bases = data.bases || bases;
     personalities = data.personalities || personalities;
     renderRoster();
     const stick = atBottom();
-    if (data.messages.length) {
-      data.messages.forEach(renderMessage);
-      since = data.messages[data.messages.length - 1].id;
+    const fresh = data.messages.filter((m) => m.id > since);
+    if (fresh.length) {
+      fresh.forEach(renderMessage);
+      since = fresh[fresh.length - 1].id;
       if (stick) log.scrollTop = log.scrollHeight;
     }
     if (data.typing) {
@@ -239,8 +275,8 @@ function closeModal() {
   modalBody.innerHTML = "";
 }
 
-function agentOptions(selected) {
-  return agents
+function agentOptions(list, selected) {
+  return list
     .map((a) => `<option value="${a.id}" ${a.id === selected ? "selected" : ""}>${esc(a.name)}</option>`)
     .join("");
 }
@@ -307,14 +343,17 @@ function openSettings(focusId) {
     const id = box.dataset.id;
     const probe = box.querySelector(".probe");
     const val = (f) => box.querySelector(`[data-f="${f}"]`).value;
-    const payload = () => ({
-      provider: val("provider"),
-      model: val("model"),
-      base_url: val("base_url"),
-      personality: val("personality"),
-      api_key: val("api_key"),
-      enabled: true,
-    });
+    const payload = (join) => {
+      const body = {
+        provider: val("provider"),
+        model: val("model"),
+        base_url: val("base_url"),
+        personality: val("personality"),
+        api_key: val("api_key"),
+      };
+      if (join) body.enabled = true;
+      return body;
+    };
 
     box.querySelector('[data-f="provider"]').onchange = (e) => {
       const base = box.querySelector('[data-f="base_url"]');
@@ -353,11 +392,27 @@ function openSettings(focusId) {
       btn.disabled = false;
     };
 
+    const toggleBtn = box.querySelector('[data-act="toggle"]');
+    const showEnabled = (on) => {
+      toggleBtn.textContent = on ? "GRUPTAN CIKAR" : "GRUBA AL";
+      toggleBtn.classList.toggle("hot", !on);
+    };
+
     box.querySelector('[data-act="save"]').onclick = async () => {
-      await post("/api/agent/" + id, payload());
+      const res = await post("/api/agent/" + id, payload(true));
       rosterSig = "";
-      probe.className = "probe";
-      probe.textContent = "kaydedildi";
+      probe.className = "probe " + (res.ok ? "" : "bad");
+      probe.textContent = !res.ok
+        ? "kaydedilemedi: " + (res.error || "bilinmeyen hata")
+        : res.enabled
+        ? "kaydedildi"
+        : "kaydedildi ama anahtar olmadan gruba katilamaz";
+      if (res.ok) {
+        showEnabled(res.enabled);
+        const keyInput = box.querySelector('[data-f="api_key"]');
+        if (keyInput.value.trim()) keyInput.placeholder = "kayitli, degistirmek icin yaz";
+        keyInput.value = "";
+      }
       poll();
     };
 
@@ -383,11 +438,22 @@ function openSettings(focusId) {
       poll();
     };
 
-    box.querySelector('[data-act="toggle"]').onclick = async () => {
+    toggleBtn.onclick = async () => {
       const a = findAgent(id);
-      await post("/api/agent/" + id, { enabled: !(a && a.enabled) });
+      const want = !(a && a.enabled);
+      const res = await post("/api/agent/" + id, { enabled: want });
       rosterSig = "";
-      closeModal();
+      if (!res.ok) {
+        probe.className = "probe bad";
+        probe.textContent = "olmadi: " + (res.error || "bilinmeyen hata");
+      } else if (want && !res.enabled) {
+        probe.className = "probe bad";
+        probe.textContent = "once API anahtarini girip KAYDET'e bas";
+      } else {
+        probe.className = "probe hidden";
+      }
+      if (a && res.ok) a.enabled = res.enabled;
+      showEnabled(res.ok ? res.enabled : a && a.enabled);
       poll();
     };
   });
@@ -407,23 +473,43 @@ function openFitne() {
   openModal("FITNE AT", `
     <div class="field">
       <label>KIME OZELDEN</label>
-      <select id="fTarget">${agentOptions(live[0].id)}</select>
+      <select id="fTarget">${agentOptions(live, live[0].id)}</select>
     </div>
     <div class="field">
       <label>MESAJ</label>
-      <textarea id="fText" placeholder="LLAMA senin arkandan konusuyormus, haberin var mi"></textarea>
+      <textarea id="fText" maxlength="300" placeholder="LLAMA senin arkandan konusuyormus, haberin var mi"></textarea>
       <span class="hint">grup bunu gormez, sadece o kisi etkilenir</span>
     </div>
+    <div class="probe hidden" id="fNote"></div>
     <div class="modal-actions">
       <button class="pxbtn hot" id="fSend">GONDER</button>
     </div>`);
-  document.getElementById("fSend").onclick = async () => {
-    const text = document.getElementById("fText").value.trim();
-    if (!text) return;
-    await post("/api/whisper", { agent_id: document.getElementById("fTarget").value, text });
+  const input = document.getElementById("fText");
+  const note = document.getElementById("fNote");
+  const btn = document.getElementById("fSend");
+  input.focus();
+  btn.onclick = async () => {
+    const text = input.value.trim();
+    if (!text) {
+      note.className = "probe bad";
+      note.textContent = "once bir mesaj yaz";
+      input.focus();
+      return;
+    }
+    btn.disabled = true;
+    const res = await post("/api/whisper", { agent_id: document.getElementById("fTarget").value, text });
+    btn.disabled = false;
+    if (!res.ok) {
+      note.className = "probe bad";
+      note.textContent = "gonderilemedi: " + (res.error || "bilinmeyen hata");
+      return;
+    }
     closeModal();
     poll();
   };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) btn.click();
+  });
 }
 
 function openTopic() {
@@ -452,7 +538,7 @@ function openPoke() {
   openModal("BIRINI DURT", `
     <div class="field">
       <label>SIRAYI KIME VERELIM</label>
-      <select id="pTarget">${agentOptions(live[0].id)}</select>
+      <select id="pTarget">${agentOptions(live, live[0].id)}</select>
     </div>
     <div class="modal-actions">
       <button class="pxbtn send" id="pSend">DURT</button>
@@ -507,10 +593,8 @@ document.querySelectorAll("[data-drama]").forEach((btn) => {
 });
 
 document.getElementById("resetBtn").onclick = async () => {
-  await post("/api/reset");
-  log.innerHTML = "";
-  lastAuthor = null;
-  since = 0;
+  const res = await post("/api/reset");
+  if (!res.ok) return;
   poll();
 };
 
@@ -529,4 +613,3 @@ sayForm.addEventListener("submit", async (e) => {
 });
 
 poll();
-setInterval(poll, 1200);

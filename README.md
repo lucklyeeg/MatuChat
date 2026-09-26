@@ -39,7 +39,7 @@ Tamamen senin bilgisayarında çalışır. Sunucu, veritabanı, hesap açma yok.
 **1. İndir ve çalıştır**
 
 - **Windows:** `baslat.bat` dosyasına çift tıkla.
-- **macOS / Linux:** terminalde `./baslat.sh`
+- **macOS / Linux:** terminalde `bash baslat.sh`
 
 İkisi de eksik paketleri kurar, sunucuyu başlatır ve tarayıcıyı açar. Python 3.9+
 gerekir, başka bir şeye ihtiyacın yok.
@@ -242,7 +242,7 @@ Türkçe karakter farkı önemli değil, `@ÇiPiTi`, `@çipiti` ve `@cipiti` ayn
 | **OTONOM** | Kendi kendine konuşmayı açar/kapatır. Kapalıyken sadece sen yazınca cevap verirler. |
 | **TEMPO** | Mesaj arası bekleme: yavaş (14-24 sn), normal (7-13 sn), hızlı (3-7 sn) |
 | **İNTERNET** | Açıkken karakterler bilmedikleri ya da güncel bir şey konuşulunca web'de arama yapabilir. Varsayılan **açık**. Desteklemeyen model sessizce aramasız cevap verir. |
-| **GERGİNLİK** | 0-3 arası. 0'da kimse didişmez, 2 ve üstünde laf sokmalar sertleşir ve aralar kısalır. |
+| **GERGİNLİK** | 0-3 arası. 0'da kimse didişmez; 1'de (varsayılan) muhabbet ve şakalaşma ön planda, sadece gerçek bir anlaşmazlıkta tartışırlar; 2'de laf sokmalar artar; 3'te grup birbirine girer. 2 ve üstünde aralar da kısalır. |
 | **SOHBETİ TEMİZLE** | Geçmişi siler, gerginliği 1'e döndürür. Anahtarlar silinmez. |
 
 ### Hızlı işlemler (yazma kutusunun üstü)
@@ -341,9 +341,9 @@ renge karşılık gelir, nokta şeffaftır.
 | Uç | Metot | Gövde / parametre | Ne yapar |
 |---|---|---|---|
 | `/` | GET | — | Arayüz |
-| `/api/state` | GET | `?since=<id>` | O id'den sonraki mesajlar + karakterler + grup durumu |
+| `/api/state` | GET | `?since=<id>` | O id'den sonraki mesajlar + karakterler + grup durumu. `epoch` alanı sohbet her temizlendiğinde ve sunucu her açıldığında değişir; arayüz bunu görünce ekranı siler |
 | `/api/say` | POST | `{"text": "..."}` | Kullanıcı mesajı gönderir |
-| `/api/whisper` | POST | `{"agent_id", "text"}` | Bir karaktere özelden mesaj (fitne) |
+| `/api/whisper` | POST | `{"agent_id", "text"}` | Bir karaktere özelden mesaj (fitne). Karakter grupta değilse ya da mesaj boşsa `400` + `{"ok": false, "error"}` |
 | `/api/poke` | POST | `{"agent_id"}` | Sırayı o karaktere verir |
 | `/api/topic` | POST | `{"topic": "..."}` | Gündemi değiştirir |
 | `/api/control` | POST | `{"auto", "frozen", "tempo", "drama", "web"}` | Otonom mod / durdurma / tempo / gerginlik / internet |

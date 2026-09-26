@@ -1,27 +1,3 @@
-# MatuChat - grup mantigi: sira secimi, kuyruk ve prompt uretimi
-# Copyright (C) 2026 lucklyeeg
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU Affero General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Affero General Public License for more details.
-#
-# You should have received a copy of the GNU Affero General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
-#
-# SPDX-License-Identifier: AGPL-3.0-or-later
-#
-# Turkce ozet (resmi gecerliligi yoktur, yalnizca kolaylik icindir):
-# Bu program ozgur yazilimdir; GNU Affero Genel Kamu Lisansi'nin 3. ya da daha
-# sonraki bir surumu kapsaminda dagitabilir ve degistirebilirsiniz.
-# Hicbir garanti verilmez. Baglayici metin yukaridaki Ingilizce
-# bildirimdir; tam lisans icin LICENSE dosyasina bakiniz.
-
 import random
 import re
 import threading
@@ -46,11 +22,14 @@ DRAMA_HINTS = {
         "Birini kırdıysan gönlünü al."
     ),
     1: (
-        "Normal grup hali. Ufak takılmalar ve dalga geçmeler olur ama kavga yok."
+        "Normal grup hali, keyifler yerinde. Muhabbet, şakalaşma ve dalga geçme "
+        "ön planda. Gerçek bir anlaşmazlık çıkarsa tartışılır ama uzatılmaz, "
+        "sonra muhabbete dönülür."
     ),
     2: (
-        "Grupta hava gergin. Bu mesajda birine açıkça karşı çık ya da laf sok. "
-        "Alttan alma, herkesle uzlaşmaya çalışma."
+        "Grupta hava biraz gergin. Laf sokmaya ve karşı çıkmaya daha yatkınsın, "
+        "alttan alma. Ama her mesajın kavga olması gerekmiyor, arada normal "
+        "muhabbet de dönüyor."
     ),
     3: (
         "Grup birbirine girdi, sen de sinirlisin. Bu mesajda birini @İSİM ile "
@@ -105,6 +84,10 @@ FOLD = str.maketrans("çğıöşüÇĞİÖŞÜ", "cgiosuCGIOSU")
 
 def _fold(text):
     return text.translate(FOLD).lower()
+
+
+def _names_in(text, name):
+    return re.search(r"(?<![\w])" + re.escape(_fold(name)), _fold(text)) is not None
 
 
 COOLDOWN_CODES = ("429", "500", "502", "503", "504")
@@ -209,7 +192,6 @@ class Room:
             kept = saved_agents.get(spec["id"])
             if not isinstance(kept, dict):
                 kept = {}
-            # Kayitli ayar, ortam degiskeninden gelen baslangic degerini ezer
             for field in store.AGENT_FIELDS:
                 if field in kept and kept[field] is not None:
                     spec[field] = kept[field]
@@ -218,8 +200,6 @@ class Room:
                 str(spec.get("personality") or ""), spec["id"]
             ):
                 spec["personality"] = ""
-            # Daha once acikca gruptan cikarildiysa oyle kalsin; ilk acilista
-            # anahtari olan herkes gruba katilir. Anahtar yoksa hicbiri katilamaz.
             wanted = bool(kept["enabled"]) if "enabled" in kept else True
             spec["enabled"] = wanted and bool(spec["api_key"])
             spec["status"] = "hazir" if spec["api_key"] else "anahtar yok"
@@ -237,6 +217,7 @@ class Room:
         except (TypeError, ValueError):
             self.drama = 1
         self.web = bool(saved_room.get("web", True))
+        self.epoch = int(time.time() * 1000)
         self.topic = ""
         self.queue = deque()
         self.nudges = {}
@@ -281,14 +262,7 @@ class Room:
         return [a for a in self.agents.values() if a["enabled"]]
 
     def _mentions(self, text):
-        hits = []
-        low = _fold(text)
-        for a in self.agents.values():
-            if not a["enabled"]:
-                continue
-            if _fold(a["name"]) in low:
-                hits.append(a["id"])
-        return hits
+        return [a["id"] for a in self.live() if _names_in(text, a["name"])]
 
     def user_says(self, text):
         text = text.strip()[:600]
@@ -311,25 +285,33 @@ class Room:
 
     def whisper(self, agent_id, text):
         agent = self.agents.get(agent_id)
-        if not agent or not text.strip():
-            return
+        text = text.strip()
+        if not agent:
+            return "karakter bulunamadi"
+        if not text:
+            return "mesaj bos"
         with self.lock:
-            self.nudges[agent_id] = text.strip()[:300]
+            if not agent["enabled"]:
+                return "%s grupta degil" % agent["name"]
+            self.nudges[agent_id] = text[:300]
             if not self.frozen:
+                if agent_id in self.queue:
+                    self.queue.remove(agent_id)
                 self.queue.appendleft(agent_id)
                 self.last_at = min(self.last_at, time.time() - 3)
         self._post(
             "whisper",
             None,
-            text.strip(),
+            text,
             {"name": "OZELDEN > " + agent["name"], "color": agent["color"]},
         )
+        return None
 
     def poke(self, agent_id):
         agent = self.agents.get(agent_id)
-        if not agent or not agent["enabled"] or self.frozen:
-            return
         with self.lock:
+            if not agent or not agent["enabled"] or self.frozen:
+                return
             self.queue.appendleft(agent_id)
             self.last_at = min(self.last_at, time.time() - 3)
 
@@ -349,13 +331,15 @@ class Room:
 
     def reset(self):
         with self.lock:
+            self.epoch += 1
             self.messages = []
             self.queue.clear()
             self.nudges.clear()
             self.topic = ""
             self.drama = 1
             self.last_at = time.time()
-        self._post("system", None, "Sohbet geçmişi silindi.")
+            self._post("system", None, "Sohbet geçmişi silindi.")
+        self._persist()
 
     def _pick(self, live):
         last = None
@@ -421,9 +405,10 @@ class Room:
         sessiz = self._stale()
         if acilan:
             lines.append(
-                'Grupta şu an KULLANICI şunu attı ve bunun üstüne konuşuluyor: "%s". Konuyu '
-                "değiştirme, bu konuda kendi fikrini net söyle ve taraf tut; "
-                "katılmadığın biri varsa @İSİM ile karşı çık." % acilan[:160]
+                'Grupta şu an KULLANICI şunu attı ve bunun üstüne konuşuluyor: "%s". '
+                "Buna kendi tarzınla karşılık ver: fikrini söyle, şaka yap, bir "
+                "anını anlat ya da soru sor. Gerçekten katılmıyorsan karşı "
+                "çıkabilirsin ama zorunda değilsin." % acilan[:160]
             )
         elif others:
             if sessiz >= USER_GAP:
@@ -436,7 +421,7 @@ class Room:
                     "Bu mesajda KULLANICI'ya dönme, ondan bahsetme. Gruptakilerden "
                     "birine yaz: " + ", ".join(others)
                 )
-        nudge = self.nudges.pop(agent["id"], None)
+        nudge = self.nudges.get(agent["id"])
         if nudge:
             lines.append(
                 "Kullanıcı sana özelden şunu yazdı, bunu aynen tekrarlama ama "
@@ -456,8 +441,15 @@ class Room:
             "- Ortada bir konu varsa üstünde kal ve üstüne bir şey ekle. Lafı hemen "
             "başka yere çevirme; konu tükenince ya da kimse ilgilenmeyince yeni bir "
             "şey aç.",
-            "- Fikrini net söyle, taraf tut. Katılmıyorsan @İSİM ile karşı çık, "
-            "katılıyorsan destekle. Herkese hak veren, ortada duran cevaplar yazma.",
+            "- Burası kavga yeri değil, muhabbet yeri. Çoğu zaman sohbet et, şaka "
+            "yap, gül, anı anlat, birinin dediğinin üstüne koy, saçma fikirler at, "
+            "birbirinizi tatlı tatlı tiye alın.",
+            "- Fikrin varsa net söyle, yavan ve herkese hak veren cevaplar yazma. "
+            "Gerçekten katılmadığında ya da biri sana laf attığında @İSİM ile "
+            "karşı çık, tartış; ama her mesajı tartışmaya çevirme, tartışma "
+            "bitince muhabbete dön.",
+            "- Kendini fazla kasma: nasıl hissediyorsan öyle yaz. Arada konu dışı "
+            "bir şey söylemek, bir şeye gülüp geçmek de serbest.",
             "- Bu bir arkadaş grubu, kullanıcının danışma hattı değil. Ağırlıklı olarak "
             "gruptakilerle konuş, onlara laf at, onların dediğine cevap ver.",
             "- KULLANICI'ya her mesajda dönme ama onu da yok sayma. Mesajlarının "
@@ -505,11 +497,10 @@ class Room:
             if self.drama >= 2:
                 lo, hi = lo * 0.65, hi * 0.7
             self.gap = random.uniform(lo, hi)
-            low = _fold(text)
             for other in self.live():
-                if other["id"] == agent["id"]:
+                if other["id"] == agent["id"] or other["id"] in self.queue:
                     continue
-                if "@" + _fold(other["name"]) in low:
+                if _names_in(text, "@" + other["name"]):
                     self.queue.append(other["id"])
             if not self.queue and random.random() < 0.45 + self.drama * 0.12:
                 pool = [a["id"] for a in self.live() if a["id"] != agent["id"]]
@@ -531,11 +522,17 @@ class Room:
                 return
             now = time.time()
             agent = None
+            waiting = []
             while self.queue:
                 cand = self.agents.get(self.queue.popleft())
-                if cand and self._ready(cand):
+                if not cand or not cand["enabled"]:
+                    continue
+                if self._ready(cand):
                     agent = cand
                     break
+                if cand["id"] in self.nudges and cand["id"] not in waiting:
+                    waiting.append(cand["id"])
+            self.queue.extend(waiting)
             if agent:
                 if now - self.last_at < 1.8:
                     self.queue.appendleft(agent["id"])
@@ -545,6 +542,8 @@ class Room:
                     return
                 agent = self._pick(ready)
             self.typing = agent["id"]
+            epoch = self.epoch
+            nudge = self.nudges.get(agent["id"])
             system = self._system_prompt(agent)
             transcript = self._transcript(agent)
             snapshot = dict(agent)
@@ -563,47 +562,53 @@ class Room:
                 text = _clean(raw, snapshot["name"])
                 if _looks_meta(text):
                     text = ""
-            if not text:
-                agent["status"] = "cevap uretemedi"
-                with self.lock:
+            with self.lock:
+                if epoch != self.epoch or self.frozen:
+                    return
+                if not text:
+                    agent["status"] = "cevap uretemedi"
                     self.last_at = time.time()
                     self.gap = 4.0
-                return
-            agent["fails"] = 0
-            agent["cooldown"] = 0
-            agent["status"] = "hazir"
-            self._post("agent", agent, text)
-            self._after(agent, text)
+                    return
+                agent["fails"] = 0
+                agent["cooldown"] = 0
+                agent["status"] = "hazir"
+                if nudge and self.nudges.get(agent["id"]) == nudge:
+                    del self.nudges[agent["id"]]
+                self._post("agent", agent, text)
+                self._after(agent, text)
         except providers.ProviderError as err:
             code = _code(err)
             with self.lock:
                 self.last_at = time.time()
                 self.gap = 5.0
-            if code in COOLDOWN_CODES:
-                already = agent.get("cooldown", 0) > time.time()
-                agent["cooldown"] = time.time() + COOLDOWN_SECONDS
-                agent["status"] = "%s, bekliyor" % _short(err)
-                if not already:
+                if code in COOLDOWN_CODES:
+                    already = agent.get("cooldown", 0) > time.time()
+                    agent["cooldown"] = time.time() + COOLDOWN_SECONDS
+                    agent["status"] = "%s, bekliyor" % _short(err)
+                    if agent["id"] in self.nudges and agent["id"] not in self.queue:
+                        self.queue.append(agent["id"])
+                    if not already:
+                        self._post(
+                            "system",
+                            None,
+                            "%s biraz dinleniyor (%s), %d saniye sonra geri doner."
+                            % (agent["name"], _short(err), COOLDOWN_SECONDS),
+                        )
+                    return
+                agent["fails"] += 1
+                agent["status"] = _short(err)
+                self._post(
+                    "system", None, "%s baglanamadi: %s." % (agent["name"], _short(err))
+                )
+                if agent["fails"] >= 3:
+                    agent["enabled"] = False
                     self._post(
                         "system",
                         None,
-                        "%s biraz dinleniyor (%s), %d saniye sonra geri doner."
-                        % (agent["name"], _short(err), COOLDOWN_SECONDS),
+                        "%s gruptan cikarildi, ayarini duzeltip geri alabilirsin."
+                        % agent["name"],
                     )
-                return
-            agent["fails"] += 1
-            agent["status"] = _short(err)
-            self._post(
-                "system", None, "%s baglanamadi: %s." % (agent["name"], _short(err))
-            )
-            if agent["fails"] >= 3:
-                agent["enabled"] = False
-                self._post(
-                    "system",
-                    None,
-                    "%s gruptan cikarildi, ayarini duzeltip geri alabilirsin."
-                    % agent["name"],
-                )
         finally:
             with self.lock:
                 self.typing = None
@@ -620,7 +625,6 @@ class Room:
                 self._post("system", None, "Motor hatasi: " + str(exc)[:80])
 
     def _persist(self):
-        """Ayarlari diske yazar. Sohbeti aksatmamak icin hatalar yutulur."""
         with self.lock:
             room = {
                 "auto": self.auto,
@@ -635,56 +639,65 @@ class Room:
         agent = self.agents.get(agent_id)
         if not agent:
             return None
-        had_key = bool(agent["api_key"])
-        if "provider" in data and data["provider"] in personas.PROVIDER_LABELS:
-            agent["provider"] = data["provider"]
-        if "personality" in data:
-            pid = str(data["personality"])
-            agent["personality"] = (
-                pid if personas.personality_allowed(pid, agent_id) else ""
-            )
-        for field in ("model", "base_url"):
-            if field in data and isinstance(data[field], str):
-                agent[field] = data[field].strip()
-        if "api_key" in data and isinstance(data["api_key"], str):
-            key = data["api_key"].strip()
-            if key and not key.startswith("•"):
-                agent["api_key"] = key
-        if "enabled" in data:
-            agent["enabled"] = bool(data["enabled"])
-        agent["fails"] = 0
-        agent["cooldown"] = 0
-        if agent["api_key"]:
-            agent["status"] = "hazir"
-            # Anahtari yeni gelen karakter kendiliginden gruba katilir; ama
-            # kullanici acikca "enabled" gonderdiyse onun dedigi gecerli.
-            if "enabled" not in data and not had_key:
-                agent["enabled"] = True
-        else:
-            agent["status"] = "anahtar yok"
-            agent["enabled"] = False
+        with self.lock:
+            had_key = bool(agent["api_key"])
+            if "provider" in data and data["provider"] in personas.PROVIDER_LABELS:
+                agent["provider"] = data["provider"]
+            if "personality" in data:
+                pid = str(data["personality"])
+                agent["personality"] = (
+                    pid if personas.personality_allowed(pid, agent_id) else ""
+                )
+            for field in ("model", "base_url"):
+                if field in data and isinstance(data[field], str):
+                    agent[field] = data[field].strip()
+            if "api_key" in data and isinstance(data["api_key"], str):
+                key = data["api_key"].strip()
+                if key and not key.startswith("•"):
+                    agent["api_key"] = key
+            if "enabled" in data:
+                agent["enabled"] = bool(data["enabled"])
+            agent["fails"] = 0
+            agent["cooldown"] = 0
+            if agent["api_key"]:
+                agent["status"] = "hazir"
+                if "enabled" not in data and not had_key:
+                    agent["enabled"] = True
+            else:
+                agent["status"] = "anahtar yok"
+                agent["enabled"] = False
+            if not agent["enabled"]:
+                self.nudges.pop(agent_id, None)
+            result = {"status": agent["status"], "enabled": agent["enabled"]}
         self._persist()
-        return agent
+        return result
 
     def test_agent(self, agent_id):
         agent = self.agents.get(agent_id)
         if not agent:
             return None
+        with self.lock:
+            copy = dict(agent)
         try:
-            reply = providers.probe(dict(agent))
+            reply = providers.probe(copy)
         except providers.ProviderError as err:
-            agent["status"] = _short(err)
+            with self.lock:
+                agent["status"] = _short(err)
             return {"ok": False, "detail": str(err)[:200], "status": agent["status"]}
-        agent["fails"] = 0
-        agent["status"] = "hazir"
+        with self.lock:
+            agent["fails"] = 0
+            agent["cooldown"] = 0
+            agent["status"] = "hazir"
         return {"ok": True, "detail": reply, "status": agent["status"]}
 
     def model_list(self, agent_id):
         agent = self.agents.get(agent_id)
         if not agent:
             return None
+        with self.lock:
+            copy = dict(agent)
         try:
-            names = providers.list_models(dict(agent))
+            names = providers.list_models(copy)
         except providers.ProviderError as err:
             return {"ok": False, "detail": str(err)[:200], "models": []}
         return {"ok": True, "detail": "%d model bulundu" % len(names), "models": names}
@@ -737,6 +750,7 @@ class Room:
                 )
             return {
                 "seq": self.seq,
+                "epoch": self.epoch,
                 "group": GROUP_NAME,
                 "bases": providers.DEFAULT_BASES,
                 "personalities": [

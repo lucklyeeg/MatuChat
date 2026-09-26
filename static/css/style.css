@@ -1,14 +1,3 @@
-/*
-MatuChat - arayuz temasi
-Copyright (C) 2026 lucklyeeg
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version. See the LICENSE file for details.
-
-SPDX-License-Identifier: AGPL-3.0-or-later
-*/
 :root {
   --ink: #08081e;
   --night: #12122e;
@@ -43,10 +32,7 @@ body {
   background-attachment: fixed;
   font-family: "Pixelify Sans", "Trebuchet MS", sans-serif;
   color: var(--cloud);
-  padding: 18px;
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
+  overflow: hidden;
   image-rendering: pixelated;
 }
 
@@ -66,6 +52,15 @@ body {
   display: flex;
   flex-direction: column;
   max-height: calc(100vh - 36px);
+}
+
+.window.app {
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  max-height: none;
+  border: none;
+  box-shadow: none;
 }
 
 .titlebar {
@@ -119,7 +114,8 @@ body {
 
 .layout {
   display: grid;
-  grid-template-columns: 268px 1fr;
+  grid-template-columns: 268px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
   flex: 1;
 }
@@ -318,7 +314,7 @@ body {
   box-shadow: 4px 4px 0 rgba(0,0,0,.45);
   padding: 7px 10px 8px;
   border-left-width: 7px;
-  max-width: 78%;
+  max-width: min(78%, 820px);
 }
 
 .bubble .head {
@@ -564,11 +560,8 @@ body {
 .hidden { display: none !important; }
 
 @media (max-width: 860px) {
-  body { padding: 8px; }
-  .layout { grid-template-columns: 1fr; }
-  .roster { border-right: none; border-bottom: var(--px) solid var(--ink); max-height: 232px; }
-  .window { max-height: none; }
-  .log { min-height: 46vh; }
+  .layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .roster { border-right: none; border-bottom: var(--px) solid var(--ink); max-height: min(232px, 30vh); }
   .bubble { max-width: 92%; }
   .ghead-topic { max-width: 34%; }
 }

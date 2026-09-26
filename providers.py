@@ -1,27 +1,3 @@
-# MatuChat - saglayici istekleri ve web arama araclari
-# Copyright (C) 2026 lucklyeeg
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU Affero General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Affero General Public License for more details.
-#
-# You should have received a copy of the GNU Affero General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
-#
-# SPDX-License-Identifier: AGPL-3.0-or-later
-#
-# Turkce ozet (resmi gecerliligi yoktur, yalnizca kolaylik icindir):
-# Bu program ozgur yazilimdir; GNU Affero Genel Kamu Lisansi'nin 3. ya da daha
-# sonraki bir surumu kapsaminda dagitabilir ve degistirebilirsiniz.
-# Hicbir garanti verilmez. Baglayici metin yukaridaki Ingilizce
-# bildirimdir; tam lisans icin LICENSE dosyasina bakiniz.
-
 import requests
 
 TIMEOUT = 40
@@ -147,7 +123,6 @@ def _anthropic(agent, system, user_text, base):
     tools = _anthropic_web_tools(agent["model"]) if agent.get("web") else []
     messages = [{"role": "user", "content": user_text}]
     chunks = []
-    # Arama yapan tur "pause_turn" ile durabilir; kaldigi yerden devam ettiriyoruz.
     for _ in range(4):
         payload = {
             "model": agent["model"],
@@ -163,7 +138,7 @@ def _anthropic(agent, system, user_text, base):
         except ProviderError as err:
             if not tools or "HTTP 400" not in str(err):
                 raise
-            tools = []  # model bu araci tanimiyor, aramasiz dene
+            tools = []
             continue
         blocks = data.get("content", [])
         chunks += [b.get("text", "") for b in blocks if b.get("type") == "text"]
@@ -173,11 +148,6 @@ def _anthropic(agent, system, user_text, base):
     return "".join(chunks)
 
 
-# --- internet erisimi -------------------------------------------------------
-# Her saglayici web aramayi baska bir alanla aciyor. Model desteklemiyorsa
-# istek HTTP 400 doner; _openai_compatible bu alanlari atip bir kez daha dener.
-
-# Anthropic'in yeni arac surumunu destekleyen modeller (digerleri eskisini alir)
 ANTHROPIC_WEB_NEW = (
     "opus-5", "opus-4-8", "opus-4-7", "opus-4-6",
     "sonnet-5", "sonnet-4-6", "fable-5", "mythos-5",
@@ -192,12 +162,11 @@ def _anthropic_web_tools(model):
 
 
 def _web_fields(agent):
-    """OpenAI uyumlu govdeye eklenecek arama alanlari."""
     provider = agent.get("provider")
     model = (agent.get("model") or "").lower()
     if provider == "groq":
         if model.startswith("groq/compound"):
-            return {}  # compound zaten kendiliginden ariyor
+            return {}
         if "gpt-oss" in model:
             return {"tools": [{"type": "browser_search"}]}
         return {}
@@ -210,7 +179,6 @@ def _web_fields(agent):
     return {}
 
 
-# max_tokens'i reddedip max_completion_tokens isteyen OpenAI modelleri
 NEW_OPENAI = ("gpt-5", "o1", "o3", "o4")
 
 
@@ -248,7 +216,6 @@ def _openai_compatible(agent, system, user_text, base):
     else:
         payload["max_tokens"] = 800
 
-    # Model kabul etmezse atilabilecek alanlar
     extras = []
     if agent["provider"] == "groq" and _is_reasoner(agent["model"]):
         payload["reasoning_format"] = "hidden"
@@ -279,7 +246,6 @@ def _openai_compatible(agent, system, user_text, base):
             note = str(err)
             if "HTTP 400" not in note:
                 raise
-            # Once en olasi sucluyu at, sonra kalan her seyi
             if "max_tokens" in note and swap_tokens():
                 continue
             if drop_extras():
