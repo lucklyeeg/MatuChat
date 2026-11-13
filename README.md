@@ -38,18 +38,21 @@ Tamamen senin bilgisayarında çalışır. Sunucu, veritabanı, hesap açma yok.
 
 **1. İndir ve çalıştır**
 
-- **Windows:** `baslat.bat` dosyasına çift tıkla.
+- **Windows (kurulumsuz):** [Releases](../../releases) sayfasından **`MatuChat.exe`** dosyasını indirip çift tıkla (Python gerekmez).
+- **Windows (kaynak koddan):** `baslat.bat` dosyasına çift tıkla.
 - **macOS / Linux:** terminalde `bash baslat.sh`
 
-İkisi de eksik paketleri kurar, sunucuyu başlatır ve tarayıcıyı açar. Python 3.9+
-gerekir, başka bir şeye ihtiyacın yok.
+Başlatıcı betikler eksik paketleri kurar, sunucuyu başlatır ve tarayıcıyı açar. Kaynak
+koddan çalıştırırken Python 3.9+ gerekir, başka bir şeye ihtiyacın yok.
 
 **2. En az bir API anahtarı gir**
 
 Açılan sayfada **API AYARLARI**'na tıkla, istediğin karakteri seç, anahtarını yapıştır
 ve **KAYDET**. Anahtarın yoksa aşağıdaki sağlayıcıların çoğunda ücretsiz bir kademe var
 — [Groq](https://console.groq.com) tek anahtarla dört karakteri birden açtığı için
-başlamak için en kolayı.
+başlamak için en kolayı (**aynı sağlayıcıdaki diğer karakterlere de uygula** kutusunu
+işaretlemen yeterli). Yerelde [Ollama](https://ollama.com) kuruluysa anahtar girmeden de
+çalıştırabilirsin.
 
 > **VPN kullanıyorsan kapat.** Groq (ve bazı sağlayıcılar) VPN ve proxy çıkışlarını
 > engelleyebiliyor; bağlantı kurulamadı ya da erişim yok hatası alırsan ilk bakacağın
@@ -60,15 +63,16 @@ başlamak için en kolayı.
 Anahtarı girilen karakter gruba katılır ve konuşmaya başlar. İki ve üzeri karakterle
 birbirleriyle de konuşurlar.
 
-### Anahtarlarım nereye gidiyor?
+### Anahtarlarım ve sohbet geçmişi nereye gidiyor?
 
-Girdiğin ayarlar proje klasöründeki **`ayarlar.json`** dosyasına kaydedilir, böylece
-uygulamayı kapatıp açtığında her şeyi baştan girmen gerekmez.
+Girdiğin ayarlar **`ayarlar.json`**, son mesajlar ise **`gecmis.json`** dosyasına
+kaydedilir (`MatuChat.exe` kullanıyorsan `.exe` dosyasının bulunduğu klasöre yazılır).
+Böylece uygulamayı kapatıp açtığında ayarların ve muhabbet kaldığı yerden devam eder.
 
-- Dosya senin diskinde durur, hiçbir yere gönderilmez.
-- `.gitignore` içinde olduğu için depoya **girmez**.
-- Anahtarları silmek istersen bu dosyayı silmen yeterli.
-- Anahtarlar arayüzde bir daha asla geri gösterilmez (alan `••••` olarak kalır).
+- Dosyalar senin diskinde durur, hiçbir yere gönderilmez.
+- `.gitignore` içinde oldukları için depoya **girmezler**.
+- Anahtarları silmek istersen `ayarlar.json` dosyasını silmen yeterli.
+- Anahtarlar arayüzde bir daha asla geri gösterilmez (alan boş kalır).
 
 İstersen ortam değişkeni de kullanabilirsin (`GROQ_API_KEY=... python app.py`). Bu
 sadece ilk açılışta başlangıç değeri olarak okunur; arayüzden bir şey kaydettiğin anda
@@ -137,24 +141,24 @@ model model atışırlar.
 
 ## API ayarları
 
-Sol paneldeki **API AYARLARI** düğmesi beş karakterin ayarını tek pencerede açar.
+Sol paneldeki **API AYARLARI** düğmesi bütün karakterlerin ayarını tek pencerede açar.
 Karakter kartındaki **ANAHTAR** düğmesi de aynı pencereyi açıp o karaktere kaydırır.
 
-Her karakter için dört alan:
+Her karakter için beş alan:
 
 | Alan | Açıklama |
 |---|---|
-| **Sağlayıcı** | Anthropic, OpenAI, Google, xAI, Groq, DeepSeek, Mistral, OpenRouter, Özel adres |
-| **Model** | Model kimliği, elle yazılır (`gpt-5`, `claude-sonnet-5`, `groq/compound` …) |
+| **Sağlayıcı** | Anthropic, OpenAI, Google, xAI, Groq, DeepSeek, Mistral, OpenRouter, Ollama, Özel adres |
+| **Model** | Model kimliği, elle yazılır ya da listeden seçilir (`gpt-5`, `claude-sonnet-5`, `groq/compound` …) |
 | **API adresi** | Boş = sağlayıcının varsayılan adresi. Doldurursan istek oraya gider. |
-| **Kişilik** | 12 hazır kişilikten biri ya da "kendi hâli" |
-| **API anahtarı** | Yazınca kaydedilir; kayıtlı anahtar arayüzde asla geri gösterilmez |
+| **Kişilik** | Hazır kişiliklerden biri, **ÖZEL** (kendi yazdığın tarif) ya da "kendi hâli" |
+| **API anahtarı** | Yazınca kaydedilir; altındaki kutucukla aynı sağlayıcıdaki diğer karakterlere de tek seferde uygulanabilir. Ollama ve yerel sunucularda boş bırakılabilir. |
 
 ### Kişilikler
 
 Varsayılan **KENDİ HÂLİ (rol yok)** — modele hiçbir karakter dayatılmaz. İstersen
-karakter başına bir kişilik seçersin; seçtiğin şey hem davranışını hem yazma stilini
-belirler ve seçim kartın üstünde görünür.
+karakter başına bir kişilik seçersin ya da **ÖZEL** seçeneğiyle kendi karakter tarifini
+yazarsın; seçtiğin şey hem davranışını hem yazma stilini belirler ve kartın üstünde görünür.
 
 | | | |
 |---|---|---|
@@ -171,7 +175,7 @@ Her bloğun altında üç düğme var:
 
 - **MODELLERİ GETİR** — anahtarınla sağlayıcının model listesini çeker ve altına
   tıklanabilir olarak dizer. Model kutusuna yazarken de aynı liste öneri olarak çıkar.
-  Groq'ta bu liste o an sunulan bütün açık modelleri gösterir, yani model kimliği
+  Groq'ta ve Ollama'da bu liste o an sunulan modelleri gösterir, yani model kimliği
   ezberlemene gerek kalmaz.
 - **TEST ET** — girdiğin ayarlarla modele tek kelimelik gerçek bir istek atar.
   Çalışıyorsa modelin cevabını, çalışmıyorsa sağlayıcının döndürdüğü ham hatayı gösterir.
@@ -189,6 +193,7 @@ Her bloğun altında üç düğme var:
 | DeepSeek | `https://api.deepseek.com/v1` |
 | Mistral | `https://api.mistral.ai/v1` |
 | OpenRouter | `https://openrouter.ai/api/v1` |
+| Ollama | `http://127.0.0.1:11434/v1` |
 | Özel adres | yok — elle yazılır |
 
 ### İnternet erişimi hangi sağlayıcıda nasıl çalışır
@@ -205,7 +210,7 @@ Her bloğun altında üç düğme var:
 | OpenRouter | `web` eklentisi | Arama başına ek ücret alır |
 | xAI | `search_parameters` | Belgelerden kalkmış, çalışmazsa aramasız devam eder |
 | OpenAI | `web_search_options` | Sadece arama modelleri (`gpt-5-search-api`, `*-search-preview`) gerçekten arar |
-| DeepSeek / Mistral / Özel | ❌ | Sohbet ucunda yerleşik arama yok |
+| DeepSeek / Mistral / Ollama / Özel | ❌ | Sohbet ucunda yerleşik arama yok |
 
 Bir model bu alanı reddederse (HTTP 400) istek **alansız olarak bir kez daha
 gönderilir** — yani desteklemeyen karakter hata vermez, sadece aramadan cevap
@@ -219,8 +224,8 @@ Adres alanı **her sağlayıcı için** geçerlidir. Girdiğin adrese şu yollar
 - Diğerleri → `{adres}/chat/completions`
 
 Yani kendi proxy'ni, şirket gateway'ini ya da yerel bir sunucuyu (Ollama, LM Studio,
-vLLM) buraya yazıp bağlanabilirsin. Örnek: sağlayıcı **Özel adres**, model
-`llama3.2`, adres `http://localhost:11434/v1`, anahtar `ollama`.
+vLLM) buraya yazıp bağlanabilirsin. Ollama için sağlayıcıdan doğrudan **Ollama (Yerel)**
+seçmen yeterli; anahtar alanı boş kalabilir.
 
 ---
 
@@ -229,20 +234,29 @@ vLLM) buraya yazıp bağlanabilirsin. Örnek: sağlayıcı **Özel adres**, mode
 Grupta en az bir karakterin anahtarı girilir girilmez muhabbet başlar. İki ve üzeri
 karakterle birbirleriyle konuşmaya başlarlar.
 
-### Yazma
+### Yazma, yanıt, tepki ve fotoğraf
 
-Alt kutuya yaz, **GÖNDER**. Mesajında `@GROK` gibi bir isim geçerse öncelik ona verilir;
-Türkçe karakter farkı önemli değil, `@ÇiPiTi`, `@çipiti` ve `@cipiti` aynı kişiye gider.
+- Alt kutuya yaz, **GÖNDER**. `@` yazdığında gruptakilerin listesi açılır; mesajdaki bir
+  karakterin adına tıklayarak da kutuya `@İSİM` ekleyebilirsin. Türkçe karakter farkı
+  önemli değil (`@ÇiPiTi`, `@çipiti` ve `@cipiti` aynı kişiye gider).
+- Bir mesajın üstüne gelince **yanıtla (`↩`)** ve **tepki (`+`)** düğmeleri çıkar.
+  Karakterler de birbirlerinin mesajlarını alıntılayabilir ve emoji bırakabilir.
+- **FOTO** düğmesiyle, panodan yapıştırarak (`Ctrl+V`) ya da sohbet alanına sürükleyip
+  bırakarak gruba fotoğraf atabilirsin. Görsel destekleyen modeller fotoğrafa bakıp yorum
+  yapar, desteklemeyen modeller metin üzerinden devam eder.
 
 ### Kontroller (sol panel)
 
 | Düğme | Ne yapar |
 |---|---|
+| **ODA VE İSİM** | Grup başlığını ve kendi adını değiştirir; karakterler sana yazdığın isimle seslenir. Üstteki grup adına tıklayarak da açılır. |
 | **SOHBETİ DURDUR** | Tam durdurma. Hiç kimse yazmaz — sen mesaj yazsan bile cevap gelmez. Mesajın gruba düşer, kimse cevaplamaz. Tekrar basınca kaldığı yerden devam eder. |
 | **OTONOM** | Kendi kendine konuşmayı açar/kapatır. Kapalıyken sadece sen yazınca cevap verirler. |
 | **TEMPO** | Mesaj arası bekleme: yavaş (14-24 sn), normal (7-13 sn), hızlı (3-7 sn) |
 | **İNTERNET** | Açıkken karakterler bilmedikleri ya da güncel bir şey konuşulunca web'de arama yapabilir. Varsayılan **açık**. Desteklemeyen model sessizce aramasız cevap verir. |
+| **SES** | Yeni mesaj geldiğinde çalan kısa 8-bit bildirim sesini açar/kapatır. |
 | **GERGİNLİK** | 0-3 arası. 0'da kimse didişmez; 1'de (varsayılan) muhabbet ve şakalaşma ön planda, sadece gerçek bir anlaşmazlıkta tartışırlar; 2'de laf sokmalar artar; 3'te grup birbirine girer. 2 ve üstünde aralar da kısalır. |
+| **SOHBETİ İNDİR** | Sohbet geçmişini `matuchat-sohbet.txt` olarak indirir. |
 | **SOHBETİ TEMİZLE** | Geçmişi siler, gerginliği 1'e döndürür. Anahtarlar silinmez. |
 
 ### Hızlı işlemler (yazma kutusunun üstü)
@@ -251,6 +265,7 @@ Türkçe karakter farkı önemli değil, `@ÇiPiTi`, `@çipiti` ve `@cipiti` ayn
 |---|---|
 | **FİTNE AT** | Seçtiğin karaktere özelden mesaj atarsın. Grup bunu görmez; o karakter bir sonraki mesajında etkisi altında davranır. Sende sarı bir kutu olarak görünür. |
 | **KONU AÇ** | Gruba bir gündem verir. Boş kaydedersen konu serbest kalır. |
+| **ANKET AÇ** | Gruba 2-4 seçenekli anket bırakır. Hem sen hem karakterler oy kullanır ve verdikleri oyları tartışırlar. |
 | **BİRİNİ DÜRT** | Sırayı istediğin karaktere verir, hemen o yazar. |
 
 ---
@@ -315,12 +330,15 @@ MatuChat/
 ├── engine.py           Grup mantığı: sıra seçimi, kuyruk, prompt üretimi, arka plan döngüsü
 ├── providers.py        Sağlayıcı istekleri (Anthropic / Google / OpenAI uyumlu) ve adres tablosu
 ├── personas.py         Karakter listesi, renkler, piksel avatarlar, SVG üretimi
-├── store.py            Ayarlari ayarlar.json dosyasina yazar / geri okur
+├── store.py            Ayarları ayarlar.json, geçmişi gecmis.json dosyasına yazar / okur
 ├── requirements.txt
 ├── .gitignore
 ├── .gitattributes
-├── baslat.bat          Windows baslatici
-├── baslat.sh           macOS / Linux baslatici
+├── baslat.bat          Windows başlatıcı
+├── baslat.sh           macOS / Linux başlatıcı
+├── .github/
+│   ├── installer.iss   Windows Inno Setup kurulum betiği
+│   └── workflows/build.yml Windows kurulum paketi derleme akışı
 ├── templates/
 │   └── index.html
 └── static/
@@ -341,20 +359,24 @@ renge karşılık gelir, nokta şeffaftır.
 | Uç | Metot | Gövde / parametre | Ne yapar |
 |---|---|---|---|
 | `/` | GET | — | Arayüz |
-| `/api/state` | GET | `?since=<id>` | O id'den sonraki mesajlar + karakterler + grup durumu. `epoch` alanı sohbet her temizlendiğinde ve sunucu her açıldığında değişir; arayüz bunu görünce ekranı siler |
-| `/api/say` | POST | `{"text": "..."}` | Kullanıcı mesajı gönderir |
-| `/api/whisper` | POST | `{"agent_id", "text"}` | Bir karaktere özelden mesaj (fitne). Karakter grupta değilse ya da mesaj boşsa `400` + `{"ok": false, "error"}` |
+| `/api/state` | GET | `?since=<id>` | O id'den sonraki mesajlar + tepkiler + anketler + karakterler + grup durumu |
+| `/api/say` | POST | `{"text", "reply_to", "image"}` | Kullanıcı mesajı (metin, alıntı ve/veya görsel) gönderir |
+| `/api/react` | POST | `{"msg_id", "emoji"}` | Bir mesaja emoji tepkisi bırakır ya da geri alır |
+| `/api/whisper` | POST | `{"agent_id", "text"}` | Bir karaktere özelden mesaj (fitne) |
 | `/api/poke` | POST | `{"agent_id"}` | Sırayı o karaktere verir |
 | `/api/topic` | POST | `{"topic": "..."}` | Gündemi değiştirir |
-| `/api/control` | POST | `{"auto", "frozen", "tempo", "drama", "web"}` | Otonom mod / durdurma / tempo / gerginlik / internet |
-| `/api/agent/<id>` | POST | `{"provider","model","base_url","api_key","enabled"}` | Karakter ayarı |
+| `/api/poll` | POST | `{"question", "options"}` | Gruba anket açar |
+| `/api/poll/vote` | POST | `{"poll_id", "option"}` | Ankette oy kullanır |
+| `/api/control` | POST | `{"auto","frozen","tempo","drama","web","sound","group_name","user_name"}` | Grup ve oda ayarları |
+| `/api/agent/<id>` | POST | `{"provider","model","base_url","personality","custom_prompt","api_key","share_key","enabled"}` | Karakter ayarı |
 | `/api/agent/<id>/test` | POST | — | Bağlantı testi |
 | `/api/agent/<id>/models` | POST | — | Sağlayıcının model listesi |
+| `/api/export` | GET | — | Sohbet geçmişini `.txt` olarak indirir |
 | `/api/reset` | POST | — | Sohbeti temizler |
 
 `tempo` değerleri: `yavas`, `normal`, `hizli`. `drama` 0-3 arası tam sayı (dışına
-taşan değer kırpılır). `auto`, `frozen`, `web` boolean. Gövdedeki tanımadığı alanlar
-sessizce yok sayılır.
+taşan değer kırpılır). `auto`, `frozen`, `web`, `sound` boolean. Gövdedeki tanımadığı
+alanlar sessizce yok sayılır.
 
 `/api/agent/<id>` gövdesinde `enabled` göndermezsen: karakterin anahtarı yoktu ve
 yenisini verdiysen kendiliğinden gruba katılır, aksi halde mevcut durumu korunur.
@@ -438,8 +460,8 @@ resmî geçerliliği yoktur — [FSF lisans çevirilerini resmî olarak onaylama
 
 ## Yayınlamadan önce
 
-Projede `.gitignore` hazır: `ayarlar.json`, `__pycache__` ve editör klasörleri
-dışarıda kalır. Depoyu açmadan önce şunlara bak:
+Projede `.gitignore` hazır: `ayarlar.json`, `gecmis.json`, `__pycache__` ve editör
+klasörleri dışarıda kalır. Depoyu açmadan önce şunlara bak:
 
 - `ayarlar.json` dosyanın gerçekten commit'lenmediğinden emin ol (`git status --ignored`
   ile kontrol et) — anahtarların o dosyada. Bir kez push edildiyse silsen bile geçmişte
@@ -453,9 +475,9 @@ dışarıda kalır. Depoyu açmadan önce şunlara bak:
   izni `600`, yani yalnız senin kullanıcın okuyabilir). Arayüzde bir daha gösterilmez.
   Bu, yerel araçların standart yaklaşımıdır; makineni başkasıyla paylaşıyorsan bunu
   bil. Silmek için dosyayı sil.
-- Tek kullanıcılık, tek gruplu bir oyuncak. Kimlik doğrulama yok, veritabanı yok,
-  sohbet geçmişi kalıcı değil (bellekte birkaç yüz mesaj tutulur, 400'ü geçince
-  en eskiler atılır). Dışarı açma.
+- Tek kullanıcılık, tek gruplu bir oyuncak. Kimlik doğrulama yok, veritabanı yok; son
+  120 mesaj yerel `gecmis.json` dosyasında tutulur (**SOHBETİ TEMİZLE** ile sıfırlanır).
+  Dışarı açma.
 - Her mesaj bir API isteği demektir. Hızlı tempo + beş karakter = ciddi token tüketimi;
   ücretli anahtarlarla oynarken tempoyu düşük tutmakta fayda var.
 - Model kimlikleri zamanla değişir; koddaki değerler sadece başlangıç noktasıdır.
