@@ -348,6 +348,95 @@ body {
   color: var(--cloud);
 }
 .bubble .body .at { color: #9fd0ff; font-weight: bold; }
+.bubble .head .who-tag { cursor: pointer; }
+.bubble .head .who-tag:hover { text-decoration: underline; }
+
+.macts {
+  display: inline-flex;
+  gap: 3px;
+  opacity: 0;
+  transition: opacity .12s;
+}
+.bubble:hover .macts { opacity: 1; }
+.mact {
+  font-family: Consolas, monospace;
+  font-size: 11px;
+  line-height: 1;
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  background: var(--night);
+  color: var(--sky);
+  cursor: pointer;
+}
+.mact:hover { background: var(--royal); color: #fff; }
+
+.quote {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 11px;
+  line-height: 1.35;
+  background: rgba(8,8,30,.55);
+  border-left: 4px solid var(--sky);
+  padding: 4px 7px;
+  margin-top: 5px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.quote b { color: var(--sky); font-size: 10px; letter-spacing: .5px; }
+.quote span { color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row.me .quote { background: rgba(8,8,30,.38); }
+.row.me .quote b { color: #d8e2ff; }
+.row.me .quote span { color: #c9cdff; }
+
+.bubble.flash { outline: 2px solid var(--gold); }
+
+.rx-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 4px;
+  background: var(--night);
+  border: 2px solid var(--ink);
+}
+.rx-opt {
+  background: transparent;
+  border: 1px solid transparent;
+  font-size: 14px;
+  padding: 2px 4px;
+  cursor: pointer;
+}
+.rx-opt:hover { background: #2e2e70; border-color: var(--line); }
+
+.rx-row { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.rx-row:empty { display: none; }
+.rx-pill {
+  font-family: Consolas, monospace;
+  font-size: 11px;
+  padding: 1px 6px;
+  border: 2px solid var(--ink);
+  background: var(--night);
+  color: var(--cloud);
+  cursor: pointer;
+}
+.rx-pill.mine { border-color: var(--gold); background: #2e2a18; }
+
+.reply-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--night);
+  border: 2px solid var(--line);
+  border-left: 6px solid var(--royal);
+  padding: 5px 8px;
+  margin-bottom: 7px;
+  font-family: Consolas, monospace;
+  font-size: 12px;
+  color: var(--dim);
+}
+.reply-bar .rb-body { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.reply-bar .rb-body b { color: var(--cloud); }
 
 .row.cont { margin-top: -7px; }
 .row.cont .bubble .head { font-size: 11px; }

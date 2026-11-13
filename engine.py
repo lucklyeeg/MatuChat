@@ -165,9 +165,44 @@ def _looks_meta(text):
     return any(phrase in low for phrase in META_PHRASES)
 
 
+REACTIONS = ("😂", "💀", "🔥", "👍", "👎", "👀", "❤️", "🤡")
+
+
+def _quote_dict(msg):
+    if not msg or msg["kind"] not in ("user", "agent"):
+        return None
+    return {
+        "id": msg["id"],
+        "name": msg["name"],
+        "color": msg["color"],
+        "text": (msg.get("text") or "")[:90],
+    }
+
+
+def _parse_actions(raw, name):
+    raw = _strip_reasoning((raw or "").strip())
+    rxs = []
+    for em, mid in re.findall(r"\{\s*([^\s:{}]+)\s*:\s*#?(\d+)\s*\}", raw):
+        if em in REACTIONS:
+            rxs.append((em, int(mid)))
+    raw = re.sub(r"\{\s*[^\s:{}]+\s*:\s*#?\d+\s*\}", " ", raw)
+    raw = re.sub(r"\[tepki:[^\]]*\]", " ", raw, flags=re.I)
+    reply_id = None
+    lead = re.match(r"^\s*\[#?(\d+)\]\s*", raw)
+    if lead:
+        reply_id = int(lead.group(1))
+    raw = re.sub(r"^\s*(?:\[#?\d+\]\s*)+", "", raw)
+    return _clean(raw, name), reply_id, rxs
+
+
 def _clean(text, name):
     text = _strip_reasoning((text or "").strip())
-    text = re.sub(r"^\s*%s\s*[:\-]\s*" % re.escape(name), "", text, flags=re.I)
+    text = re.sub(
+        r"^\s*%s\s*(?:\(->[^)]*\))?\s*[:\-]\s*" % re.escape(name),
+        "",
+        text,
+        flags=re.I,
+    )
     text = re.sub(r"^\s*\(.*?\)\s*", "", text)
     text = text.replace("\r", "").strip()
     text = re.sub(r"\n{2,}", "\n", text)
@@ -273,23 +308,65 @@ class Room:
                 self.messages = self.messages[-300:]
             return msg
 
+    def _find_msg(self, msg_id):
+        try:
+            mid = int(msg_id)
+        except (TypeError, ValueError):
+            return None
+        for msg in reversed(self.messages):
+            if msg["id"] == mid:
+                return msg
+        return None
+
+    def _set_reaction(self, msg, emoji, who, toggle=False):
+        if not msg or msg["kind"] not in ("user", "agent") or emoji not in REACTIONS:
+            return False
+        bucket = msg.setdefault("reactions", {})
+        names = bucket.setdefault(emoji, [])
+        if who in names:
+            if toggle:
+                names.remove(who)
+                if not names:
+                    bucket.pop(emoji, None)
+        else:
+            for other_em, other_names in list(bucket.items()):
+                if who in other_names:
+                    other_names.remove(who)
+                    if not other_names:
+                        bucket.pop(other_em, None)
+            bucket.setdefault(emoji, []).append(who)
+        return True
+
+    def react(self, msg_id, emoji):
+        with self.lock:
+            msg = self._find_msg(msg_id)
+            return self._set_reaction(msg, emoji, self.user_name or "SEN", toggle=True)
+
     def live(self):
         return [a for a in self.agents.values() if a["enabled"]]
 
     def _mentions(self, text):
         return [a["id"] for a in self.live() if _names_in(text, a["name"])]
 
-    def user_says(self, text):
+    def user_says(self, text, reply_to=None):
         text = text.strip()[:600]
         if not text:
             return
-        self._post("user", None, text)
+        with self.lock:
+            ref = self._find_msg(reply_to)
+            quote = _quote_dict(ref)
+            meta = {"reply_to": quote} if quote else None
+        self._post("user", None, text, meta)
         with self.lock:
             self.last_at = time.time()
             if self.frozen:
                 self.queue.clear()
                 return
             targets = self._mentions(text)
+            if ref and ref["kind"] == "agent" and ref.get("agent_id"):
+                aid = ref["agent_id"]
+                if aid in self.agents and self.agents[aid]["enabled"] and aid not in targets:
+                    targets.insert(0, aid)
             pool = [a["id"] for a in self.live() if a["id"] not in targets]
             random.shuffle(pool)
             extra = random.randint(0, 1) if targets else random.randint(1, 2)
@@ -480,6 +557,8 @@ class Room:
             "yaklaşık dörtte birinde ona dön: fikrini sor, yazdığına değin ya da "
             "laf at. Kalanında gruptakilerle konuş." % uname,
             "- Birine dönmek için @İSİM yaz.",
+            "- Geçmişteki belirli bir mesaja doğrudan yanıt veriyorsan en başa [#12] gibi o mesajın numarasını yazabilirsin; normal akışta yazmana gerek yok.",
+            "- Çok komik ya da saçma bulduğun bir mesaja ifade bırakmak istersen mesajının en sonuna {😂:#12} gibi tek bir tepki ekleyebilirsin (nadiren kullan; izin verilenler: 😂 💀 🔥 👍 👎 👀 ❤️ 🤡).",
             "- Kendini tekrarlama, başkasının yazdığını farklı kelimelerle tekrar yazma.",
         ]
         if self.web:
@@ -504,10 +583,23 @@ class Room:
                 continue
             if msg["kind"] == "system":
                 rows.append("[grup] " + msg["text"])
-            elif msg["kind"] == "user":
-                rows.append(uname + ": " + msg["text"])
             else:
-                rows.append(msg["name"] + ": " + msg["text"])
+                who = uname if msg["kind"] == "user" else msg["name"]
+                rep = (
+                    " (-> %s)" % msg["reply_to"]["name"]
+                    if msg.get("reply_to")
+                    else ""
+                )
+                rx = ""
+                if msg.get("reactions"):
+                    parts = [
+                        "%s %s" % (em, ",".join(us))
+                        for em, us in msg["reactions"].items()
+                        if us
+                    ]
+                    if parts:
+                        rx = " [tepki: " + " ".join(parts) + "]"
+                rows.append("[#%d] %s%s: %s%s" % (msg["id"], who, rep, msg["text"], rx))
         body = "\n".join(rows) if rows else "[grup] Grup yeni kuruldu, kimse yazmadı."
         return (
             body
@@ -515,13 +607,21 @@ class Room:
             % agent["name"]
         )
 
-    def _after(self, agent, text):
+    def _after(self, agent, text, quoted_agent_id=None):
         with self.lock:
             self.last_at = time.time()
             lo, hi = TEMPO_GAPS.get(self.tempo, TEMPO_GAPS["normal"])
             if self.drama >= 2:
                 lo, hi = lo * 0.65, hi * 0.7
             self.gap = random.uniform(lo, hi)
+            if (
+                quoted_agent_id
+                and quoted_agent_id != agent["id"]
+                and quoted_agent_id not in self.queue
+                and quoted_agent_id in self.agents
+                and self.agents[quoted_agent_id]["enabled"]
+            ):
+                self.queue.append(quoted_agent_id)
             for other in self.live():
                 if other["id"] == agent["id"] or other["id"] in self.queue:
                     continue
@@ -576,7 +676,7 @@ class Room:
 
         try:
             raw = providers.generate(snapshot, system, transcript)
-            text = _clean(raw, snapshot["name"])
+            text, reply_id, rxs = _parse_actions(raw, snapshot["name"])
             if not text or _looks_meta(text):
                 raw = providers.generate(
                     snapshot,
@@ -584,7 +684,9 @@ class Room:
                     transcript + "\n\nDusunme, plan yapma, kurallari tekrarlama, "
                     "ne yazacagini anlatma. Dogrudan gruba dusecek tek mesaji yaz.",
                 )
-                text = _clean(raw, snapshot["name"])
+                text, reply_id2, rxs2 = _parse_actions(raw, snapshot["name"])
+                reply_id = reply_id2 or reply_id
+                rxs = rxs2 or rxs
                 if _looks_meta(text):
                     text = ""
             with self.lock:
@@ -600,8 +702,29 @@ class Room:
                 agent["status"] = "hazir"
                 if nudge and self.nudges.get(agent["id"]) == nudge:
                     del self.nudges[agent["id"]]
-                self._post("agent", agent, text)
-                self._after(agent, text)
+                for em, mid in rxs[:2]:
+                    target = self._find_msg(mid)
+                    if target and target.get("agent_id") != agent["id"]:
+                        self._set_reaction(target, em, agent["name"], toggle=False)
+                last_chat = None
+                for prev in reversed(self.messages):
+                    if prev["kind"] in ("user", "agent"):
+                        last_chat = prev["id"]
+                        break
+                quote = None
+                quoted_aid = None
+                if reply_id:
+                    ref = self._find_msg(reply_id)
+                    if (
+                        ref
+                        and ref.get("agent_id") != agent["id"]
+                        and (ref["id"] != last_chat or ref["kind"] == "user")
+                    ):
+                        quote = _quote_dict(ref)
+                        quoted_aid = ref.get("agent_id")
+                meta = {"reply_to": quote} if quote else None
+                self._post("agent", agent, text, meta)
+                self._after(agent, text, quoted_aid)
         except providers.ProviderError as err:
             code = _code(err)
             with self.lock:
@@ -809,6 +932,12 @@ class Room:
                     for item in personas.PERSONALITIES
                 ],
                 "messages": fresh,
+                "reactions": {
+                    str(m["id"]): m["reactions"]
+                    for m in self.messages
+                    if m.get("reactions")
+                },
+                "reaction_set": list(REACTIONS),
                 "agents": agents,
                 "typing": self.typing,
                 "auto": self.auto,

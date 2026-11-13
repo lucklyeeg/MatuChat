@@ -32,8 +32,15 @@ def state():
 @app.post("/api/say")
 def say():
     data = request.get_json(silent=True) or {}
-    room.user_says(str(data.get("text", "")))
+    room.user_says(str(data.get("text", "")), data.get("reply_to"))
     return jsonify({"ok": True})
+
+
+@app.post("/api/react")
+def react():
+    data = request.get_json(silent=True) or {}
+    ok = room.react(data.get("msg_id"), str(data.get("emoji", "")))
+    return jsonify({"ok": ok})
 
 
 @app.post("/api/whisper")

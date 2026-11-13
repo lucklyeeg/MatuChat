@@ -43,6 +43,10 @@ let frozen = false;
 let groupName = "ORTAK ODA";
 let userName = "";
 let currentTopic = "";
+let replyTarget = null;
+let reactionSet = ["😂", "💀", "🔥", "👍", "👎", "👀", "❤️", "🤡"];
+let rxSig = "";
+const msgCache = new Map();
 
 function esc(s) {
   return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -98,6 +102,49 @@ function renderRoster() {
   });
 }
 
+function quoteHtml(q) {
+  if (!q) return "";
+  return `<div class="quote" style="border-left-color:${esc(q.color || "#8b9ade")}" data-jump="${q.id}"><b>${esc(q.name)}</b><span>${esc(q.text)}</span></div>`;
+}
+
+function renderRxBox(box, map) {
+  box.innerHTML = "";
+  if (!map) return;
+  const me = userName || "SEN";
+  Object.entries(map).forEach(([em, names]) => {
+    if (!names || !names.length) return;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "rx-pill" + (names.includes(me) ? " mine" : "");
+    btn.dataset.rxpick = em;
+    btn.title = names.join(", ");
+    btn.textContent = em + " " + names.length;
+    box.appendChild(btn);
+  });
+}
+
+function syncReactions(all) {
+  const sig = JSON.stringify([userName, all || {}]);
+  if (sig === rxSig) return;
+  rxSig = sig;
+  log.querySelectorAll(".rx-row[data-rx]").forEach((box) => {
+    renderRxBox(box, all && all[box.dataset.rx]);
+  });
+}
+
+function setReply(m) {
+  replyTarget = m;
+  const bar = document.getElementById("replyBar");
+  if (!m) {
+    bar.classList.add("hidden");
+    return;
+  }
+  document.getElementById("replyText").innerHTML =
+    `<b>${esc(m.name)}:</b> ${esc((m.text || "").slice(0, 80))}`;
+  bar.classList.remove("hidden");
+  sayInput.focus();
+}
+
 function renderMessage(m) {
   if (!log.querySelector(".daysep")) {
     const sep = document.createElement("div");
@@ -121,34 +168,45 @@ function renderMessage(m) {
     log.appendChild(el);
     return;
   }
+  msgCache.set(m.id, m);
   const row = document.createElement("div");
+  row.dataset.id = m.id;
   const agent = m.agent_id ? findAgent(m.agent_id) : null;
   const author = m.kind === "user" ? "user" : m.agent_id;
-  const chained = author === lastAuthor;
+  const chained = author === lastAuthor && !m.reply_to;
   lastAuthor = author;
+  const acts = `<span class="macts"><button type="button" class="mact" data-reply="${m.id}" title="Yanitla">&#8617;</button><button type="button" class="mact" data-rxmenu="${m.id}" title="Tepki">+</button></span>`;
   if (m.kind === "user") {
     row.className = "row me" + (chained ? " cont" : "");
     row.innerHTML = `
       <div class="bubble">
-        <div class="head"><span>${esc(m.name || userName || "SEN")}</span><span class="time">${esc(m.ts)}<span class="tick">&#10003;&#10003;</span></span></div>
+        <div class="head"><span>${esc(m.name || userName || "SEN")}</span>${acts}<span class="time">${esc(m.ts)}<span class="tick">&#10003;&#10003;</span></span></div>
+        ${quoteHtml(m.reply_to)}
         <div class="body">${highlight(m.text)}</div>
+        <div class="rx-picker hidden"></div>
+        <div class="rx-row" data-rx="${m.id}"></div>
       </div>`;
   } else {
     row.className = "row" + (chained ? " cont" : "");
     const head = chained
-      ? `<div class="head"><span class="time">${esc(m.ts)}</span></div>`
+      ? `<div class="head">${acts}<span class="time">${esc(m.ts)}</span></div>`
       : `<div class="head">
-          <span style="color:${esc(m.color)}">${esc(m.name)}</span>
+          <span class="who-tag" style="color:${esc(m.color)}">${esc(m.name)}</span>
           <span class="tag">${esc(agent ? agent.provider_label : "")}</span>
+          ${acts}
           <span class="time">${esc(m.ts)}</span>
         </div>`;
     row.innerHTML = `
       <div class="face">${chained || !agent ? "" : agent.svg}</div>
       <div class="bubble" style="border-left-color:${esc(m.color)}">
         ${head}
+        ${quoteHtml(m.reply_to)}
         <div class="body">${highlight(m.text)}</div>
+        <div class="rx-picker hidden"></div>
+        <div class="rx-row" data-rx="${m.id}"></div>
       </div>`;
   }
+  renderRxBox(row.querySelector(".rx-row"), m.reactions);
   log.appendChild(row);
 }
 
@@ -183,6 +241,9 @@ function clearLog() {
   log.innerHTML = "";
   lastAuthor = null;
   since = 0;
+  rxSig = "";
+  msgCache.clear();
+  setReply(null);
 }
 
 let polling = false;
@@ -225,6 +286,7 @@ async function pollOnce() {
     agents = data.agents;
     bases = data.bases || bases;
     personalities = data.personalities || personalities;
+    if (data.reaction_set && data.reaction_set.length) reactionSet = data.reaction_set;
     groupName = data.group || "ORTAK ODA";
     userName = data.user_name || "";
     currentTopic = data.topic || "";
@@ -232,10 +294,12 @@ async function pollOnce() {
     const stick = atBottom();
     const fresh = data.messages.filter((m) => m.id > since);
     if (fresh.length) {
+      rxSig = "";
       fresh.forEach(renderMessage);
       since = fresh[fresh.length - 1].id;
       if (stick) log.scrollTop = log.scrollHeight;
     }
+    syncReactions(data.reactions);
     if (data.typing) {
       const a = findAgent(data.typing);
       typingBox.classList.remove("hidden");
@@ -678,12 +742,68 @@ document.getElementById("fitneBtn").onclick = openFitne;
 document.getElementById("topicBtn").onclick = openTopic;
 document.getElementById("pokeBtn").onclick = openPoke;
 
+document.getElementById("replyCancel").onclick = () => setReply(null);
+
+log.addEventListener("click", async (e) => {
+  const repBtn = e.target.closest("[data-reply]");
+  if (repBtn) {
+    const m = msgCache.get(Number(repBtn.dataset.reply));
+    if (m) setReply(m);
+    return;
+  }
+  const menuBtn = e.target.closest("[data-rxmenu]");
+  if (menuBtn) {
+    const bubble = menuBtn.closest(".bubble");
+    const picker = bubble.querySelector(".rx-picker");
+    const open = picker.classList.contains("hidden");
+    log.querySelectorAll(".rx-picker").forEach((p) => p.classList.add("hidden"));
+    if (open) {
+      picker.innerHTML = reactionSet
+        .map((em) => `<button type="button" class="rx-opt" data-rxpick="${em}">${em}</button>`)
+        .join("");
+      picker.classList.remove("hidden");
+    }
+    return;
+  }
+  const pickBtn = e.target.closest("[data-rxpick]");
+  if (pickBtn) {
+    const row = pickBtn.closest(".row");
+    const picker = row && row.querySelector(".rx-picker");
+    if (picker) picker.classList.add("hidden");
+    if (row && row.dataset.id) {
+      await post("/api/react", { msg_id: Number(row.dataset.id), emoji: pickBtn.dataset.rxpick });
+      poll();
+    }
+    return;
+  }
+  const jump = e.target.closest("[data-jump]");
+  if (jump) {
+    const target = log.querySelector(`.row[data-id="${jump.dataset.jump}"] .bubble`);
+    if (target) {
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+      target.classList.add("flash");
+      setTimeout(() => target.classList.remove("flash"), 900);
+    }
+    return;
+  }
+  const who = e.target.closest(".who-tag");
+  if (who) {
+    const tag = "@" + who.textContent.trim() + " ";
+    if (!sayInput.value.includes(tag.trim())) {
+      sayInput.value = (sayInput.value ? sayInput.value.replace(/\s*$/, " ") : "") + tag;
+    }
+    sayInput.focus();
+  }
+});
+
 sayForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const text = sayInput.value.trim();
   if (!text) return;
+  const reply_to = replyTarget ? replyTarget.id : null;
   sayInput.value = "";
-  await post("/api/say", { text });
+  setReply(null);
+  await post("/api/say", { text, reply_to });
   poll();
 });
 
