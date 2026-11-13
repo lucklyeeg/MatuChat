@@ -16,7 +16,7 @@
 <div class="window app">
   <div class="titlebar">
     <span class="tb-dots"><i></i><i></i><i></i></span>
-    <h1>MatuChat <small>v1.0</small></h1>
+    <h1>MatuChat <small>v1.3</small></h1>
     <span class="tb-stripes"></span>
     <span class="tb-badge" id="roomBadge">4 AI</span>
   </div>
@@ -29,10 +29,12 @@
       <div class="panel-head">GRUP AYARI</div>
       <div class="room-controls">
         <button class="pxbtn wide send" id="settingsBtn">API AYARLARI</button>
+        <button class="pxbtn wide" id="profileBtn">ODA VE ISIM</button>
         <button class="pxbtn wide" id="freezeBtn">SOHBETI DURDUR</button>
         <button class="pxbtn wide" id="autoBtn" data-on="1">OTONOM: ACIK</button>
         <button class="pxbtn wide" id="tempoBtn">TEMPO: NORMAL</button>
         <button class="pxbtn wide" id="webBtn">INTERNET: ACIK</button>
+        <button class="pxbtn wide" id="soundBtn">SES: ACIK</button>
         <div class="drama">
           <span class="drama-label">GERGINLIK</span>
           <div class="drama-bar" id="dramaBar"></div>
@@ -41,6 +43,7 @@
             <button class="pxbtn tiny" data-drama="1">+</button>
           </div>
         </div>
+        <button class="pxbtn wide ghost" id="exportBtn">SOHBETI INDIR</button>
         <button class="pxbtn wide ghost" id="resetBtn">SOHBETI TEMIZLE</button>
       </div>
     </aside>
@@ -69,9 +72,22 @@
         <div class="quick">
           <button class="pxbtn" id="fitneBtn">FITNE AT</button>
           <button class="pxbtn" id="topicBtn">KONU AC</button>
+          <button class="pxbtn" id="pollBtn">ANKET AC</button>
           <button class="pxbtn" id="pokeBtn">BIRINI DURT</button>
         </div>
+        <div class="reply-bar hidden" id="replyBar">
+          <span class="rb-body" id="replyText"></span>
+          <button class="pxbtn tiny" type="button" id="replyCancel">X</button>
+        </div>
+        <div class="img-bar hidden" id="imgBar">
+          <img id="imgThumb" alt="">
+          <span class="ib-body">fotograf hazir</span>
+          <button class="pxbtn tiny" type="button" id="imgCancel">X</button>
+        </div>
+        <div class="at-menu hidden" id="atMenu"></div>
         <form id="sayForm" autocomplete="off">
+          <input id="imgInput" type="file" accept="image/*" class="hidden">
+          <button class="pxbtn" type="button" id="imgBtn" title="Fotograf ekle">FOTO</button>
           <input id="sayInput" type="text" maxlength="500" placeholder="gruba yaz... (@ISIM ile birine don)">
           <button class="pxbtn send" type="submit">GONDER</button>
         </form>

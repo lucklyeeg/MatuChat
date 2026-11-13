@@ -9,7 +9,10 @@ OPENAI_BASES = {
     "deepseek": "https://api.deepseek.com/v1",
     "mistral": "https://api.mistral.ai/v1",
     "openrouter": "https://openrouter.ai/api/v1",
+    "ollama": "http://127.0.0.1:11434/v1",
 }
+
+KEYLESS = ("ollama", "custom")
 
 DEFAULT_BASES = dict(OPENAI_BASES)
 DEFAULT_BASES["anthropic"] = "https://api.anthropic.com"
@@ -17,8 +20,14 @@ DEFAULT_BASES["gemini"] = "https://generativelanguage.googleapis.com"
 DEFAULT_BASES["custom"] = ""
 
 
+def needs_key(agent):
+    return agent.get("provider") not in KEYLESS
+
+
 def base_for(agent):
     given = (agent.get("base_url") or "").strip().rstrip("/")
+    if agent.get("provider") == "ollama" and given and not given.endswith("/v1"):
+        given += "/v1"
     return given or DEFAULT_BASES.get(agent.get("provider"), "")
 
 
@@ -81,7 +90,7 @@ def _get(url, headers):
 
 
 def list_models(agent):
-    if not agent.get("api_key"):
+    if needs_key(agent) and not agent.get("api_key"):
         raise ProviderError("API anahtari yok")
     base = base_for(agent)
     if not base:
@@ -102,7 +111,8 @@ def list_models(agent):
                 continue
             names.append(m.get("name", "").split("/")[-1])
     else:
-        data = _get(base + "/models", {"Authorization": "Bearer " + agent["api_key"]})
+        headers = {"Authorization": "Bearer " + agent["api_key"]} if agent.get("api_key") else {}
+        data = _get(base + "/models", headers)
         rows = data.get("data")
         if not isinstance(rows, list):
             rows = data.get("models") or []
@@ -113,7 +123,16 @@ def list_models(agent):
     return _chat_only(names)
 
 
-def _anthropic(agent, system, user_text, base):
+def _split_data_url(image):
+    if not image or not image.startswith("data:image/"):
+        return None, None
+    head, sep, b64 = image.partition(",")
+    if not sep or ";base64" not in head:
+        return None, None
+    return head[5:].split(";")[0], b64
+
+
+def _anthropic(agent, system, user_text, base, image=None):
     url = base + "/v1/messages"
     headers = {
         "x-api-key": agent["api_key"],
@@ -121,7 +140,18 @@ def _anthropic(agent, system, user_text, base):
         "content-type": "application/json",
     }
     tools = _anthropic_web_tools(agent["model"]) if agent.get("web") else []
-    messages = [{"role": "user", "content": user_text}]
+    mime, b64 = _split_data_url(image)
+    if mime:
+        first_content = [
+            {
+                "type": "image",
+                "source": {"type": "base64", "media_type": mime, "data": b64},
+            },
+            {"type": "text", "text": user_text},
+        ]
+    else:
+        first_content = user_text
+    messages = [{"role": "user", "content": first_content}]
     chunks = []
     for _ in range(4):
         payload = {
@@ -136,10 +166,14 @@ def _anthropic(agent, system, user_text, base):
         try:
             data = _post(url, headers, payload)
         except ProviderError as err:
-            if not tools or "HTTP 400" not in str(err):
-                raise
-            tools = []
-            continue
+            if "HTTP 400" in str(err):
+                if isinstance(messages[0]["content"], list):
+                    messages[0]["content"] = user_text
+                    continue
+                if tools:
+                    tools = []
+                    continue
+            raise
         blocks = data.get("content", [])
         chunks += [b.get("text", "") for b in blocks if b.get("type") == "text"]
         if data.get("stop_reason") != "pause_turn":
@@ -197,18 +231,26 @@ def _is_reasoner(model):
     return any(tag in low for tag in REASONERS)
 
 
-def _openai_compatible(agent, system, user_text, base):
+def _openai_compatible(agent, system, user_text, base, image=None):
     url = base.rstrip("/") + "/chat/completions"
-    headers = {
-        "Authorization": "Bearer " + agent["api_key"],
-        "Content-Type": "application/json",
-    }
+    headers = {"Content-Type": "application/json"}
+    if agent.get("api_key"):
+        headers["Authorization"] = "Bearer " + agent["api_key"]
+    mime, _ = _split_data_url(image)
+    user_content = (
+        [
+            {"type": "text", "text": user_text},
+            {"type": "image_url", "image_url": {"url": image}},
+        ]
+        if mime
+        else user_text
+    )
     payload = {
         "model": agent["model"],
         "temperature": agent["temperature"],
         "messages": [
             {"role": "system", "content": system},
-            {"role": "user", "content": user_text},
+            {"role": "user", "content": user_content},
         ],
     }
     if _wants_completion_tokens(agent):
@@ -237,6 +279,12 @@ def _openai_compatible(agent, system, user_text, base):
             hit = payload.pop(key, None) is not None or hit
         return hit
 
+    def drop_image():
+        if not isinstance(payload["messages"][1]["content"], list):
+            return False
+        payload["messages"][1]["content"] = user_text
+        return True
+
     data = None
     while True:
         try:
@@ -244,9 +292,11 @@ def _openai_compatible(agent, system, user_text, base):
             break
         except ProviderError as err:
             note = str(err)
-            if "HTTP 400" not in note:
+            if "HTTP 400" not in note and "HTTP 422" not in note:
                 raise
             if "max_tokens" in note and swap_tokens():
+                continue
+            if drop_image():
                 continue
             if drop_extras():
                 continue
@@ -259,15 +309,21 @@ def _openai_compatible(agent, system, user_text, base):
     return choices[0].get("message", {}).get("content", "") or ""
 
 
-def _gemini(agent, system, user_text, base):
+def _gemini(agent, system, user_text, base, image=None):
     url = "%s/v1beta/models/%s:generateContent?key=%s" % (
         base,
         agent["model"],
         agent["api_key"],
     )
+    mime, b64 = _split_data_url(image)
+    parts = (
+        [{"inline_data": {"mime_type": mime, "data": b64}}, {"text": user_text}]
+        if mime
+        else [{"text": user_text}]
+    )
     payload = {
         "systemInstruction": {"parts": [{"text": system}]},
-        "contents": [{"role": "user", "parts": [{"text": user_text}]}],
+        "contents": [{"role": "user", "parts": parts}],
         "generationConfig": {
             "temperature": agent["temperature"],
             "maxOutputTokens": 800,
@@ -275,13 +331,20 @@ def _gemini(agent, system, user_text, base):
     }
     if agent.get("web"):
         payload["tools"] = [{"google_search": {}}]
-    try:
-        data = _post(url, {"Content-Type": "application/json"}, payload)
-    except ProviderError as err:
-        if "tools" not in payload or "HTTP 400" not in str(err):
+    while True:
+        try:
+            data = _post(url, {"Content-Type": "application/json"}, payload)
+            break
+        except ProviderError as err:
+            if "HTTP 400" not in str(err):
+                raise
+            if len(payload["contents"][0]["parts"]) > 1:
+                payload["contents"][0]["parts"] = [{"text": user_text}]
+                continue
+            if "tools" in payload:
+                payload.pop("tools")
+                continue
             raise
-        payload.pop("tools")
-        data = _post(url, {"Content-Type": "application/json"}, payload)
     cands = data.get("candidates") or []
     if not cands:
         raise ProviderError("bos yanit")
@@ -289,19 +352,19 @@ def _gemini(agent, system, user_text, base):
     return "".join(p.get("text", "") for p in parts if not p.get("thought"))
 
 
-def generate(agent, system, user_text):
+def generate(agent, system, user_text, image=None):
     provider = agent["provider"]
-    if not agent.get("api_key"):
+    if needs_key(agent) and not agent.get("api_key"):
         raise ProviderError("API anahtari yok")
     base = base_for(agent)
     if not base:
         raise ProviderError("API adresi bos")
     if provider == "anthropic":
-        return _anthropic(agent, system, user_text, base)
+        return _anthropic(agent, system, user_text, base, image=image)
     if provider == "gemini":
-        return _gemini(agent, system, user_text, base)
+        return _gemini(agent, system, user_text, base, image=image)
     if provider in OPENAI_BASES or provider == "custom":
-        return _openai_compatible(agent, system, user_text, base)
+        return _openai_compatible(agent, system, user_text, base, image=image)
     raise ProviderError("bilinmeyen saglayici")
 
 

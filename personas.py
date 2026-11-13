@@ -279,6 +279,7 @@ ROSTER = [
 
 PERSONALITIES = [
     {"id": "", "label": "KENDI HALI (rol yok)", "prompt": ""},
+    {"id": "ozel", "label": "OZEL (kendin yaz)", "prompt": ""},
     {
         "id": "dost",
         "label": "DOST CANLISI",
@@ -419,6 +420,8 @@ def personality_prompt(pid):
 
 
 def personality_label(pid):
+    if pid == "ozel":
+        return "OZEL"
     for item in PERSONALITIES:
         if item["id"] == pid:
             return item["label"] if item["id"] else ""
@@ -442,6 +445,7 @@ PROVIDER_LABELS = {
     "mistral": "MISTRAL",
     "groq": "GROQ",
     "openrouter": "OPENROUTER",
+    "ollama": "OLLAMA",
     "custom": "OZEL ADRES",
 }
 
@@ -476,6 +480,7 @@ def build_roster():
             spec["id"].upper() + "_BASE_URL", spec["base_url"]
         ).strip()
         item["personality"] = ""
+        item["custom_prompt"] = ""
         item["temperature"] = TEMPERATURE
         item["svg"] = sprite_svg(spec["sprite"], spec["palette"])
         out.append(item)

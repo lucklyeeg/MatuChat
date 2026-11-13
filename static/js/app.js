@@ -8,11 +8,14 @@ const dramaBar = document.getElementById("dramaBar");
 const autoBtn = document.getElementById("autoBtn");
 const tempoBtn = document.getElementById("tempoBtn");
 const webBtn = document.getElementById("webBtn");
+const soundBtn = document.getElementById("soundBtn");
 const overlay = document.getElementById("overlay");
 const modalTitle = document.getElementById("modalTitle");
 const modalBody = document.getElementById("modalBody");
 const sayForm = document.getElementById("sayForm");
 const sayInput = document.getElementById("sayInput");
+const imgInput = document.getElementById("imgInput");
+const atMenu = document.getElementById("atMenu");
 
 const TEMPOS = ["yavas", "normal", "hizli"];
 const PROVIDERS = [
@@ -24,11 +27,13 @@ const PROVIDERS = [
   ["deepseek", "DeepSeek"],
   ["mistral", "Mistral"],
   ["openrouter", "OpenRouter"],
+  ["ollama", "Ollama (Yerel)"],
   ["custom", "Ozel adres (OpenAI uyumlu)"],
 ];
 
 let since = 0;
 let epoch = null;
+let booted = false;
 let lastAuthor = null;
 let agents = [];
 let bases = {};
@@ -37,11 +42,107 @@ let rosterSig = "";
 let tempo = "normal";
 let drama = 1;
 let web = true;
+let sound = true;
 let auto = true;
 let frozen = false;
+let groupName = "ORTAK ODA";
+let userName = "";
+let currentTopic = "";
+let replyTarget = null;
+let pendingImage = null;
+let reactionSet = ["😂", "💀", "🔥", "👍", "👎", "👀", "❤️", "🤡"];
+let rxSig = "";
+let audioCtx = null;
+let atItems = [];
+let atIndex = 0;
+let atRange = null;
+const msgCache = new Map();
 
 function esc(s) {
   return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+function foldTr(s) {
+  return String(s)
+    .replace(/[Çç]/g, "c")
+    .replace(/[Ğğ]/g, "g")
+    .replace(/[İıI]/g, "i")
+    .replace(/[Öö]/g, "o")
+    .replace(/[Şş]/g, "s")
+    .replace(/[Üü]/g, "u")
+    .toLowerCase();
+}
+
+function blip(freq) {
+  if (!sound) return;
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    if (!audioCtx) audioCtx = new Ctx();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    const now = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = "square";
+    osc.frequency.setValueAtTime(freq || 520, now);
+    osc.frequency.setValueAtTime((freq || 520) * 1.25, now + 0.03);
+    gain.gain.setValueAtTime(0.035, now);
+    gain.gain.exponentialRampToValueAtTime(0.0008, now + 0.07);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start(now);
+    osc.stop(now + 0.075);
+  } catch (e) {}
+}
+
+function setImage(dataUrl) {
+  pendingImage = dataUrl || null;
+  const bar = document.getElementById("imgBar");
+  const thumb = document.getElementById("imgThumb");
+  if (!pendingImage) {
+    bar.classList.add("hidden");
+    thumb.removeAttribute("src");
+    imgInput.value = "";
+    return;
+  }
+  thumb.src = pendingImage;
+  bar.classList.remove("hidden");
+}
+
+function readImageFile(file) {
+  if (!file || !file.type || !file.type.startsWith("image/")) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      const maxSide = 800;
+      let w = img.width;
+      let h = img.height;
+      if (w > maxSide || h > maxSide) {
+        if (w >= h) {
+          h = Math.max(1, Math.round((h * maxSide) / w));
+          w = maxSide;
+        } else {
+          w = Math.max(1, Math.round((w * maxSide) / h));
+          h = maxSide;
+        }
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, w, h);
+      const out = canvas.toDataURL("image/jpeg", 0.82);
+      if (out.length > 1200000) {
+        statusText.textContent = "gorsel cok buyuk";
+        return;
+      }
+      setImage(out);
+      sayInput.focus();
+    };
+    img.src = reader.result;
+  };
+  reader.readAsDataURL(file);
 }
 
 function highlight(text) {
@@ -57,7 +158,7 @@ function atBottom() {
 }
 
 function renderRoster() {
-  const sig = JSON.stringify(agents.map((a) => [a.id, a.enabled, a.has_key, a.status, a.provider_label, a.personality_label]));
+  const sig = JSON.stringify([userName, agents.map((a) => [a.id, a.enabled, a.has_key, a.status, a.provider_label, a.personality_label])]);
   if (sig === rosterSig) return;
   rosterSig = sig;
   agentList.innerHTML = "";
@@ -81,8 +182,9 @@ function renderRoster() {
   const live = agents.filter((a) => a.enabled);
   roomBadge.textContent = live.length + " AI";
   document.getElementById("setupHint").classList.toggle("hidden", live.length > 0);
+  const meTag = userName ? userName.toLowerCase() : "sen";
   document.getElementById("memberLine").textContent = live.length
-    ? live.map((a) => a.name.toLowerCase()).join(", ") + ", sen"
+    ? live.map((a) => a.name.toLowerCase()).join(", ") + ", " + meTag
     : "grupta senden baska kimse yok";
   const faces = document.getElementById("headFaces");
   faces.innerHTML = "";
@@ -91,6 +193,81 @@ function renderRoster() {
     cell.innerHTML = a.svg;
     faces.appendChild(cell);
   });
+}
+
+function quoteHtml(q) {
+  if (!q) return "";
+  return `<div class="quote" style="border-left-color:${esc(q.color || "#8b9ade")}" data-jump="${q.id}"><b>${esc(q.name)}</b><span>${esc(q.text)}</span></div>`;
+}
+
+function renderRxBox(box, map) {
+  box.innerHTML = "";
+  if (!map) return;
+  const me = userName || "SEN";
+  Object.entries(map).forEach(([em, names]) => {
+    if (!names || !names.length) return;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "rx-pill" + (names.includes(me) ? " mine" : "");
+    btn.dataset.rxpick = em;
+    btn.title = names.join(", ");
+    btn.textContent = em + " " + names.length;
+    box.appendChild(btn);
+  });
+}
+
+function syncReactions(all) {
+  const sig = JSON.stringify([userName, all || {}]);
+  if (sig === rxSig) return;
+  rxSig = sig;
+  log.querySelectorAll(".rx-row[data-rx]").forEach((box) => {
+    renderRxBox(box, all && all[box.dataset.rx]);
+  });
+}
+
+let pollSig = "";
+
+function renderPollOpts(box, options) {
+  box.innerHTML = "";
+  if (!options) return;
+  const me = userName || "SEN";
+  const total = options.reduce((sum, o) => sum + ((o.votes && o.votes.length) || 0), 0);
+  options.forEach((o, i) => {
+    const votes = o.votes || [];
+    const pct = total ? Math.round((votes.length / total) * 100) : 0;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "poll-opt" + (votes.includes(me) ? " mine" : "");
+    btn.dataset.pvote = i;
+    btn.innerHTML = `
+      <span class="poll-fill" style="width:${pct}%"></span>
+      <span class="poll-row"><b>${esc(o.text)}</b><i>${votes.length} oy (${pct}%)</i></span>
+      ${votes.length ? `<span class="poll-who">${esc(votes.join(", "))}</span>` : ""}`;
+    box.appendChild(btn);
+  });
+}
+
+function syncPolls(all) {
+  const sig = JSON.stringify([userName, all || {}]);
+  if (sig === pollSig) return;
+  pollSig = sig;
+  log.querySelectorAll(".poll-card[data-poll]").forEach((card) => {
+    renderPollOpts(card.querySelector(".poll-opts"), all && all[card.dataset.poll]);
+  });
+}
+
+function setReply(m) {
+  replyTarget = m;
+  const bar = document.getElementById("replyBar");
+  if (!m) {
+    bar.classList.add("hidden");
+    return;
+  }
+  const preview = m.text || (m.image ? "[fotoğraf]" : "");
+  document.getElementById("replyText").innerHTML =
+    `<b>${esc(m.name)}:</b> ${esc(preview.slice(0, 80))}`;
+  bar.classList.remove("hidden");
+  sayInput.focus();
 }
 
 function renderMessage(m) {
@@ -116,34 +293,62 @@ function renderMessage(m) {
     log.appendChild(el);
     return;
   }
+  if (m.kind === "poll") {
+    lastAuthor = null;
+    const el = document.createElement("div");
+    el.className = "poll-card";
+    el.dataset.poll = m.id;
+    el.innerHTML = `
+      <div class="poll-head"><span>ANKET &middot; ${esc(m.name)}</span><span class="time">${esc(m.ts)}</span></div>
+      <div class="poll-q">${esc(m.text)}</div>
+      <div class="poll-opts"></div>`;
+    renderPollOpts(el.querySelector(".poll-opts"), m.options);
+    log.appendChild(el);
+    return;
+  }
+  msgCache.set(m.id, m);
   const row = document.createElement("div");
+  row.dataset.id = m.id;
   const agent = m.agent_id ? findAgent(m.agent_id) : null;
   const author = m.kind === "user" ? "user" : m.agent_id;
-  const chained = author === lastAuthor;
+  const chained = author === lastAuthor && !m.reply_to;
   lastAuthor = author;
+  const acts = `<span class="macts"><button type="button" class="mact" data-reply="${m.id}" title="Yanitla">&#8617;</button><button type="button" class="mact" data-rxmenu="${m.id}" title="Tepki">+</button></span>`;
+  const imgHtml = m.image ? `<img class="chat-img" src="${esc(m.image)}" alt="fotograf">` : "";
+  const bodyHtml = m.text ? `<div class="body">${highlight(m.text)}</div>` : "";
   if (m.kind === "user") {
     row.className = "row me" + (chained ? " cont" : "");
     row.innerHTML = `
       <div class="bubble">
-        <div class="head"><span>SEN</span><span class="time">${esc(m.ts)}<span class="tick">&#10003;&#10003;</span></span></div>
-        <div class="body">${highlight(m.text)}</div>
+        <div class="head"><span>${esc(m.name || userName || "SEN")}</span>${acts}<span class="time">${esc(m.ts)}<span class="tick">&#10003;&#10003;</span></span></div>
+        ${quoteHtml(m.reply_to)}
+        ${imgHtml}
+        ${bodyHtml}
+        <div class="rx-picker hidden"></div>
+        <div class="rx-row" data-rx="${m.id}"></div>
       </div>`;
   } else {
     row.className = "row" + (chained ? " cont" : "");
     const head = chained
-      ? `<div class="head"><span class="time">${esc(m.ts)}</span></div>`
+      ? `<div class="head">${acts}<span class="time">${esc(m.ts)}</span></div>`
       : `<div class="head">
-          <span style="color:${esc(m.color)}">${esc(m.name)}</span>
+          <span class="who-tag" style="color:${esc(m.color)}">${esc(m.name)}</span>
           <span class="tag">${esc(agent ? agent.provider_label : "")}</span>
+          ${acts}
           <span class="time">${esc(m.ts)}</span>
         </div>`;
     row.innerHTML = `
       <div class="face">${chained || !agent ? "" : agent.svg}</div>
       <div class="bubble" style="border-left-color:${esc(m.color)}">
         ${head}
-        <div class="body">${highlight(m.text)}</div>
+        ${quoteHtml(m.reply_to)}
+        ${imgHtml}
+        ${bodyHtml}
+        <div class="rx-picker hidden"></div>
+        <div class="rx-row" data-rx="${m.id}"></div>
       </div>`;
   }
+  renderRxBox(row.querySelector(".rx-row"), m.reactions);
   log.appendChild(row);
 }
 
@@ -178,6 +383,10 @@ function clearLog() {
   log.innerHTML = "";
   lastAuthor = null;
   since = 0;
+  rxSig = "";
+  pollSig = "";
+  msgCache.clear();
+  setReply(null);
 }
 
 let polling = false;
@@ -220,14 +429,27 @@ async function pollOnce() {
     agents = data.agents;
     bases = data.bases || bases;
     personalities = data.personalities || personalities;
+    if (data.reaction_set && data.reaction_set.length) reactionSet = data.reaction_set;
+    groupName = data.group || "ORTAK ODA";
+    userName = data.user_name || "";
+    currentTopic = data.topic || "";
+    sound = data.sound !== false;
     renderRoster();
     const stick = atBottom();
     const fresh = data.messages.filter((m) => m.id > since);
     if (fresh.length) {
+      rxSig = "";
+      pollSig = "";
       fresh.forEach(renderMessage);
       since = fresh[fresh.length - 1].id;
       if (stick) log.scrollTop = log.scrollHeight;
+      if (booted && fresh.some((m) => m.kind === "agent")) {
+        blip(520);
+      }
     }
+    booted = true;
+    syncReactions(data.reactions);
+    syncPolls(data.polls);
     if (data.typing) {
       const a = findAgent(data.typing);
       typingBox.classList.remove("hidden");
@@ -251,9 +473,11 @@ async function pollOnce() {
     web = data.web !== false;
     webBtn.textContent = "INTERNET: " + (web ? "ACIK" : "KAPALI");
     webBtn.classList.toggle("hot", !web);
+    soundBtn.textContent = "SES: " + (sound ? "ACIK" : "KAPALI");
+    soundBtn.classList.toggle("hot", !sound);
     renderDrama();
-    topicLine.textContent = data.topic ? "konu: " + data.topic : "konu serbest";
-    document.getElementById("groupName").textContent = data.group || "GRUP";
+    topicLine.textContent = currentTopic ? "konu: " + currentTopic : "konu serbest";
+    document.getElementById("groupName").textContent = groupName;
     statusText.textContent = frozen
       ? "sohbet durduruldu, kimse yazmiyor"
       : auto
@@ -319,9 +543,14 @@ function openSettings(focusId) {
         </select>
         <span class="hint">davranisini ve yazma stilini belirler</span>
       </div>
+      <div class="field custom-p ${a.personality === "ozel" ? "" : "hidden"}">
+        <label>OZEL KISILIK TARIFI</label>
+        <textarea data-f="custom_prompt" maxlength="360" placeholder="ornek: her konuyu futbola baglayan mahalle abisi">${esc(a.custom_prompt || "")}</textarea>
+      </div>
       <div class="field">
         <label>API ANAHTARI</label>
-        <input data-f="api_key" type="password" placeholder="${a.has_key ? "kayitli, degistirmek icin yaz" : "anahtari buraya yapistir"}">
+        <input data-f="api_key" type="password" placeholder="${a.raw_key ? "kayitli, degistirmek icin yaz" : (a.provider === "ollama" || a.provider === "custom" ? "yerel sunucuda bos birakilabilir" : "anahtari buraya yapistir")}">
+        <label class="chk"><input type="checkbox" data-f="share_key"> ayni saglayicidaki diger karakterlere de uygula</label>
       </div>
       <div class="probe hidden"></div>
       <div class="cfg-actions">
@@ -349,15 +578,28 @@ function openSettings(focusId) {
         model: val("model"),
         base_url: val("base_url"),
         personality: val("personality"),
+        custom_prompt: val("custom_prompt"),
         api_key: val("api_key"),
+        share_key: box.querySelector('[data-f="share_key"]').checked,
       };
       if (join) body.enabled = true;
       return body;
     };
 
+    box.querySelector('[data-f="personality"]').onchange = (e) => {
+      box.querySelector(".custom-p").classList.toggle("hidden", e.target.value !== "ozel");
+    };
+
     box.querySelector('[data-f="provider"]').onchange = (e) => {
+      const p = e.target.value;
       const base = box.querySelector('[data-f="base_url"]');
-      base.placeholder = (bases && bases[e.target.value]) || "kendi adresini yaz";
+      const keyInput = box.querySelector('[data-f="api_key"]');
+      base.placeholder = (bases && bases[p]) || "kendi adresini yaz";
+      if (!findAgent(id)?.raw_key) {
+        keyInput.placeholder = p === "ollama" || p === "custom"
+          ? "yerel sunucuda bos birakilabilir"
+          : "anahtari buraya yapistir";
+      }
     };
 
     box.querySelector('[data-act="models"]').onclick = async (e) => {
@@ -399,7 +641,8 @@ function openSettings(focusId) {
     };
 
     box.querySelector('[data-act="save"]').onclick = async () => {
-      const res = await post("/api/agent/" + id, payload(true));
+      const sent = payload(true);
+      const res = await post("/api/agent/" + id, sent);
       rosterSig = "";
       probe.className = "probe " + (res.ok ? "" : "bad");
       probe.textContent = !res.ok
@@ -412,6 +655,15 @@ function openSettings(focusId) {
         const keyInput = box.querySelector('[data-f="api_key"]');
         if (keyInput.value.trim()) keyInput.placeholder = "kayitli, degistirmek icin yaz";
         keyInput.value = "";
+        if (sent.share_key) {
+          modalBody.querySelectorAll(".cfg").forEach((peer) => {
+            if (peer === box || peer.querySelector('[data-f="provider"]').value !== sent.provider) return;
+            const tb = peer.querySelector('[data-act="toggle"]');
+            tb.textContent = "GRUPTAN CIKAR";
+            tb.classList.remove("hot");
+            peer.querySelector('[data-f="api_key"]').placeholder = "kayitli, degistirmek icin yaz";
+          });
+        }
       }
       poll();
     };
@@ -512,18 +764,108 @@ function openFitne() {
   });
 }
 
+function openProfile() {
+  openModal("ODA VE ISIM", `
+    <div class="field">
+      <label>GRUP ADI</label>
+      <input id="gNameIn" maxlength="40" value="${esc(groupName)}" placeholder="ORTAK ODA">
+    </div>
+    <div class="field">
+      <label>SENIN ADIN</label>
+      <input id="uNameIn" maxlength="24" value="${esc(userName)}" placeholder="bos birakirsan SEN gorunur">
+      <span class="hint">karakterler grupta sana bu isimle seslenir</span>
+    </div>
+    <div class="modal-actions">
+      <button class="pxbtn send" id="profSave">KAYDET</button>
+    </div>`);
+  const gIn = document.getElementById("gNameIn");
+  const uIn = document.getElementById("uNameIn");
+  const saveBtn = document.getElementById("profSave");
+  uIn.focus();
+  saveBtn.onclick = async () => {
+    await post("/api/control", { group_name: gIn.value, user_name: uIn.value });
+    rosterSig = "";
+    closeModal();
+    poll();
+  };
+  [gIn, uIn].forEach((el) => {
+    el.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") saveBtn.click();
+    });
+  });
+}
+
 function openTopic() {
   openModal("KONU AC", `
     <div class="field">
       <label>ODANIN KONUSU</label>
-      <input id="tText" placeholder="ornek: ananasli pizza suc mu">
+      <input id="tText" value="${esc(currentTopic)}" placeholder="ornek: ananasli pizza suc mu">
       <span class="hint">bos birakip kaydedersen konu serbest kalir</span>
     </div>
     <div class="modal-actions">
       <button class="pxbtn send" id="tSend">AC</button>
     </div>`);
-  document.getElementById("tSend").onclick = async () => {
-    await post("/api/topic", { topic: document.getElementById("tText").value });
+  const tIn = document.getElementById("tText");
+  const tBtn = document.getElementById("tSend");
+  tIn.focus();
+  tBtn.onclick = async () => {
+    await post("/api/topic", { topic: tIn.value });
+    closeModal();
+    poll();
+  };
+  tIn.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") tBtn.click();
+  });
+}
+
+function openPollModal() {
+  openModal("ANKET AC", `
+    <div class="field">
+      <label>SORU</label>
+      <input id="pqIn" maxlength="160" placeholder="ornek: gece 3'te menemen yenir mi">
+    </div>
+    <div class="field" id="poWrap">
+      <label>SECENEKLER</label>
+      <input class="po-in" maxlength="70" placeholder="1. secenek (ornek: Evet)">
+      <input class="po-in" maxlength="70" placeholder="2. secenek (ornek: Hayir)">
+    </div>
+    <div>
+      <button class="pxbtn tiny" type="button" id="poAdd">+ SECENEK EKLE</button>
+    </div>
+    <div class="probe hidden" id="poNote"></div>
+    <div class="modal-actions">
+      <button class="pxbtn send" id="poSend">ANKETI AC</button>
+    </div>`);
+  const qIn = document.getElementById("pqIn");
+  const wrap = document.getElementById("poWrap");
+  const addBtn = document.getElementById("poAdd");
+  const note = document.getElementById("poNote");
+  const sendBtn = document.getElementById("poSend");
+  qIn.focus();
+  addBtn.onclick = () => {
+    const count = wrap.querySelectorAll(".po-in").length;
+    if (count >= 4) return;
+    const inp = document.createElement("input");
+    inp.className = "po-in";
+    inp.maxLength = 70;
+    inp.placeholder = (count + 1) + ". secenek";
+    wrap.appendChild(inp);
+    inp.focus();
+    if (count + 1 >= 4) addBtn.classList.add("hidden");
+  };
+  sendBtn.onclick = async () => {
+    const question = qIn.value.trim();
+    const options = Array.from(wrap.querySelectorAll(".po-in"))
+      .map((el) => el.value.trim())
+      .filter(Boolean);
+    sendBtn.disabled = true;
+    const res = await post("/api/poll", { question, options });
+    sendBtn.disabled = false;
+    if (!res.ok) {
+      note.className = "probe bad";
+      note.textContent = res.error || "anket acilamadi";
+      return;
+    }
     closeModal();
     poll();
   };
@@ -555,12 +897,53 @@ agentList.addEventListener("click", (e) => {
   if (btn) openSettings(btn.dataset.cfg);
 });
 
+function hideAtMenu() {
+  atItems = [];
+  atRange = null;
+  atMenu.classList.add("hidden");
+  atMenu.innerHTML = "";
+}
+
+function renderAtMenu() {
+  if (!atItems.length) {
+    hideAtMenu();
+    return;
+  }
+  atMenu.innerHTML = atItems
+    .map(
+      (a, idx) =>
+        `<button type="button" class="at-item ${idx === atIndex ? "on" : ""}" data-atpick="${idx}"><b style="color:${esc(a.color)}">@${esc(a.name)}</b><i>${esc(a.provider_label)}</i></button>`
+    )
+    .join("");
+  atMenu.classList.remove("hidden");
+}
+
+function applyAtPick(idx) {
+  const picked = atItems[idx];
+  if (!picked || !atRange) return;
+  const val = sayInput.value;
+  const before = val.slice(0, atRange[0]);
+  const after = val.slice(atRange[1]);
+  const insert = "@" + picked.name + " ";
+  sayInput.value = before + insert + after.replace(/^\s+/, "");
+  const pos = (before + insert).length;
+  sayInput.setSelectionRange(pos, pos);
+  hideAtMenu();
+  sayInput.focus();
+}
+
 document.getElementById("modalClose").onclick = closeModal;
 overlay.addEventListener("click", (e) => {
   if (e.target === overlay) closeModal();
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") closeModal();
+  if (e.key === "Escape") {
+    if (!atMenu.classList.contains("hidden")) {
+      hideAtMenu();
+      return;
+    }
+    closeModal();
+  }
 });
 
 document.getElementById("freezeBtn").onclick = async () => {
@@ -578,6 +961,14 @@ webBtn.onclick = async () => {
   poll();
 };
 
+soundBtn.onclick = async () => {
+  const next = !sound;
+  sound = next;
+  if (next) blip(660);
+  await post("/api/control", { sound: next });
+  poll();
+};
+
 tempoBtn.onclick = async () => {
   const next = TEMPOS[(TEMPOS.indexOf(tempo) + 1) % TEMPOS.length];
   await post("/api/control", { tempo: next });
@@ -592,6 +983,15 @@ document.querySelectorAll("[data-drama]").forEach((btn) => {
   };
 });
 
+document.getElementById("exportBtn").onclick = () => {
+  const a = document.createElement("a");
+  a.href = "/api/export";
+  a.download = "matuchat-sohbet.txt";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+};
+
 document.getElementById("resetBtn").onclick = async () => {
   const res = await post("/api/reset");
   if (!res.ok) return;
@@ -599,16 +999,169 @@ document.getElementById("resetBtn").onclick = async () => {
 };
 
 document.getElementById("settingsBtn").onclick = () => openSettings();
+document.getElementById("profileBtn").onclick = openProfile;
+document.querySelector(".ghead-text").onclick = openProfile;
 document.getElementById("fitneBtn").onclick = openFitne;
 document.getElementById("topicBtn").onclick = openTopic;
+document.getElementById("pollBtn").onclick = openPollModal;
 document.getElementById("pokeBtn").onclick = openPoke;
+
+document.getElementById("replyCancel").onclick = () => setReply(null);
+document.getElementById("imgBtn").onclick = () => imgInput.click();
+document.getElementById("imgCancel").onclick = () => setImage(null);
+imgInput.addEventListener("change", () => {
+  if (imgInput.files && imgInput.files[0]) readImageFile(imgInput.files[0]);
+});
+
+document.addEventListener("paste", (e) => {
+  if (!overlay.classList.contains("hidden")) return;
+  const items = (e.clipboardData && e.clipboardData.items) || [];
+  for (let i = 0; i < items.length; i++) {
+    if (items[i].type && items[i].type.startsWith("image/")) {
+      e.preventDefault();
+      readImageFile(items[i].getAsFile());
+      return;
+    }
+  }
+});
+
+const stageEl = document.querySelector(".stage");
+stageEl.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  stageEl.classList.add("dragover");
+});
+stageEl.addEventListener("dragleave", (e) => {
+  if (!stageEl.contains(e.relatedTarget)) stageEl.classList.remove("dragover");
+});
+stageEl.addEventListener("drop", (e) => {
+  e.preventDefault();
+  stageEl.classList.remove("dragover");
+  const files = (e.dataTransfer && e.dataTransfer.files) || [];
+  if (files[0] && files[0].type && files[0].type.startsWith("image/")) {
+    readImageFile(files[0]);
+  }
+});
+
+sayInput.addEventListener("input", () => {
+  const pos = sayInput.selectionStart || 0;
+  const head = sayInput.value.slice(0, pos);
+  const m = head.match(/(^|\s)@([A-Za-z0-9ÇĞİÖŞÜçğıöşü-]*)$/);
+  if (!m) {
+    hideAtMenu();
+    return;
+  }
+  const q = foldTr(m[2]);
+  const pool = agents.some((a) => a.enabled) ? agents.filter((a) => a.enabled) : agents;
+  atItems = pool.filter((a) => foldTr(a.name).startsWith(q)).slice(0, 6);
+  atIndex = 0;
+  atRange = [pos - m[2].length - 1, pos];
+  renderAtMenu();
+});
+
+sayInput.addEventListener("keydown", (e) => {
+  if (atMenu.classList.contains("hidden") || !atItems.length) return;
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    atIndex = (atIndex + 1) % atItems.length;
+    renderAtMenu();
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    atIndex = (atIndex - 1 + atItems.length) % atItems.length;
+    renderAtMenu();
+  } else if (e.key === "Tab" || e.key === "Enter") {
+    e.preventDefault();
+    applyAtPick(atIndex);
+  }
+});
+
+sayInput.addEventListener("blur", () => {
+  setTimeout(hideAtMenu, 140);
+});
+
+atMenu.addEventListener("mousedown", (e) => {
+  const btn = e.target.closest("[data-atpick]");
+  if (!btn) return;
+  e.preventDefault();
+  applyAtPick(Number(btn.dataset.atpick));
+});
+
+log.addEventListener("click", async (e) => {
+  const pic = e.target.closest(".chat-img");
+  if (pic) {
+    openModal("FOTOGRAF", `<img class="modal-img" src="${esc(pic.getAttribute("src") || "")}" alt="">`);
+    return;
+  }
+  const pvote = e.target.closest("[data-pvote]");
+  if (pvote) {
+    const card = pvote.closest(".poll-card");
+    if (card && card.dataset.poll) {
+      await post("/api/poll/vote", { poll_id: Number(card.dataset.poll), option: Number(pvote.dataset.pvote) });
+      poll();
+    }
+    return;
+  }
+  const repBtn = e.target.closest("[data-reply]");
+  if (repBtn) {
+    const m = msgCache.get(Number(repBtn.dataset.reply));
+    if (m) setReply(m);
+    return;
+  }
+  const menuBtn = e.target.closest("[data-rxmenu]");
+  if (menuBtn) {
+    const bubble = menuBtn.closest(".bubble");
+    const picker = bubble.querySelector(".rx-picker");
+    const open = picker.classList.contains("hidden");
+    log.querySelectorAll(".rx-picker").forEach((p) => p.classList.add("hidden"));
+    if (open) {
+      picker.innerHTML = reactionSet
+        .map((em) => `<button type="button" class="rx-opt" data-rxpick="${em}">${em}</button>`)
+        .join("");
+      picker.classList.remove("hidden");
+    }
+    return;
+  }
+  const pickBtn = e.target.closest("[data-rxpick]");
+  if (pickBtn) {
+    const row = pickBtn.closest(".row");
+    const picker = row && row.querySelector(".rx-picker");
+    if (picker) picker.classList.add("hidden");
+    if (row && row.dataset.id) {
+      await post("/api/react", { msg_id: Number(row.dataset.id), emoji: pickBtn.dataset.rxpick });
+      poll();
+    }
+    return;
+  }
+  const jump = e.target.closest("[data-jump]");
+  if (jump) {
+    const target = log.querySelector(`.row[data-id="${jump.dataset.jump}"] .bubble`);
+    if (target) {
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+      target.classList.add("flash");
+      setTimeout(() => target.classList.remove("flash"), 900);
+    }
+    return;
+  }
+  const who = e.target.closest(".who-tag");
+  if (who) {
+    const tag = "@" + who.textContent.trim() + " ";
+    if (!sayInput.value.includes(tag.trim())) {
+      sayInput.value = (sayInput.value ? sayInput.value.replace(/\s*$/, " ") : "") + tag;
+    }
+    sayInput.focus();
+  }
+});
 
 sayForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const text = sayInput.value.trim();
-  if (!text) return;
+  const image = pendingImage;
+  if (!text && !image) return;
+  const reply_to = replyTarget ? replyTarget.id : null;
   sayInput.value = "";
-  await post("/api/say", { text });
+  hideAtMenu();
+  setReply(null);
+  setImage(null);
+  await post("/api/say", { text, reply_to, image });
   poll();
 });
 

@@ -165,9 +165,50 @@ def _looks_meta(text):
     return any(phrase in low for phrase in META_PHRASES)
 
 
+REACTIONS = ("😂", "💀", "🔥", "👍", "👎", "👀", "❤️", "🤡")
+
+
+def _quote_dict(msg):
+    if not msg or msg["kind"] not in ("user", "agent"):
+        return None
+    label = msg.get("text") or ("[fotoğraf]" if msg.get("image") else "")
+    return {
+        "id": msg["id"],
+        "name": msg["name"],
+        "color": msg["color"],
+        "text": label[:90],
+    }
+
+
+def _parse_actions(raw, name):
+    raw = _strip_reasoning((raw or "").strip())
+    vote_num = None
+    vm = re.search(r"\[\s*oy\s*:\s*(\d+)\s*\]", raw, flags=re.I)
+    if vm:
+        vote_num = int(vm.group(1))
+    raw = re.sub(r"\[\s*oy\s*:\s*\d+\s*\]", " ", raw, flags=re.I)
+    rxs = []
+    for em, mid in re.findall(r"\{\s*([^\s:{}]+)\s*:\s*#?(\d+)\s*\}", raw):
+        if em in REACTIONS:
+            rxs.append((em, int(mid)))
+    raw = re.sub(r"\{\s*[^\s:{}]+\s*:\s*#?\d+\s*\}", " ", raw)
+    raw = re.sub(r"\[tepki:[^\]]*\]", " ", raw, flags=re.I)
+    reply_id = None
+    lead = re.match(r"^\s*\[#?(\d+)\]\s*", raw)
+    if lead:
+        reply_id = int(lead.group(1))
+    raw = re.sub(r"^\s*(?:\[#?\d+\]\s*)+", "", raw)
+    return _clean(raw, name), reply_id, rxs, vote_num
+
+
 def _clean(text, name):
     text = _strip_reasoning((text or "").strip())
-    text = re.sub(r"^\s*%s\s*[:\-]\s*" % re.escape(name), "", text, flags=re.I)
+    text = re.sub(
+        r"^\s*%s\s*(?:\(->[^)]*\))?\s*[:\-]\s*" % re.escape(name),
+        "",
+        text,
+        flags=re.I,
+    )
     text = re.sub(r"^\s*\(.*?\)\s*", "", text)
     text = text.replace("\r", "").strip()
     text = re.sub(r"\n{2,}", "\n", text)
@@ -178,6 +219,16 @@ def _clean(text, name):
         dot = max(cut.rfind("."), cut.rfind("!"), cut.rfind("?"))
         text = cut[: dot + 1] if dot > 60 else cut + "..."
     return text
+
+
+def _usable(agent):
+    if agent.get("api_key"):
+        return True
+    if agent.get("provider") == "ollama":
+        return True
+    if agent.get("provider") == "custom" and (agent.get("base_url") or "").strip():
+        return True
+    return False
 
 
 class Room:
@@ -196,13 +247,15 @@ class Room:
                 if field in kept and kept[field] is not None:
                     spec[field] = kept[field]
             spec["api_key"] = str(spec.get("api_key") or "")
+            spec["custom_prompt"] = str(spec.get("custom_prompt") or "").strip()[:360]
             if not personas.personality_allowed(
                 str(spec.get("personality") or ""), spec["id"]
             ):
                 spec["personality"] = ""
-            wanted = bool(kept["enabled"]) if "enabled" in kept else True
-            spec["enabled"] = wanted and bool(spec["api_key"])
-            spec["status"] = "hazir" if spec["api_key"] else "anahtar yok"
+            ok = _usable(spec)
+            wanted = bool(kept["enabled"]) if "enabled" in kept else bool(spec["api_key"])
+            spec["enabled"] = wanted and ok
+            spec["status"] = "hazir" if ok else "anahtar yok"
             spec["fails"] = 0
             spec["cooldown"] = 0
             self.agents[spec["id"]] = spec
@@ -217,6 +270,9 @@ class Room:
         except (TypeError, ValueError):
             self.drama = 1
         self.web = bool(saved_room.get("web", True))
+        self.sound = bool(saved_room.get("sound", True))
+        self.group_name = str(saved_room.get("group_name") or "").strip()[:40] or GROUP_NAME
+        self.user_name = str(saved_room.get("user_name") or "").strip()[:24]
         self.epoch = int(time.time() * 1000)
         self.topic = ""
         self.queue = deque()
@@ -224,29 +280,37 @@ class Room:
         self.typing = None
         self.last_at = time.time()
         self.gap = 6.0
+        hist = store.load_history()
+        if hist:
+            self.messages = hist
+            self.seq = max(m["id"] for m in hist)
+        else:
+            self._post(
+                "system",
+                None,
+                "Bu Flask uygulaması lucklyeeg tarafından Batu Matu'nun videosu için "
+                "yapılmıştır.",
+                persist=False,
+            )
+            self._post(
+                "system",
+                None,
+                "Grup kuruldu. Karakterlerin AYAR menüsünden API anahtarlarını gir, "
+                "anahtarı olan herkes gruba katılır.",
+                persist=False,
+            )
         self.worker = threading.Thread(target=self._loop, daemon=True)
         self.worker.start()
-        self._post(
-            "system",
-            None,
-            "Bu Flask uygulaması lucklyeeg tarafından Batu Matu'nun videosu için "
-            "yapılmıştır.",
-        )
-        self._post(
-            "system",
-            None,
-            "Grup kuruldu. Karakterlerin AYAR menüsünden API anahtarlarını gir, "
-            "anahtarı olan herkes gruba katılır.",
-        )
 
-    def _post(self, kind, agent, text, meta=None):
+    def _post(self, kind, agent, text, meta=None, persist=True):
         with self.lock:
             self.seq += 1
+            uname = self.user_name or "SEN"
             msg = {
                 "id": self.seq,
                 "kind": kind,
                 "agent_id": agent["id"] if agent else None,
-                "name": agent["name"] if agent else ("SEN" if kind == "user" else "ODA"),
+                "name": agent["name"] if agent else (uname if kind == "user" else "ODA"),
                 "color": agent["color"] if agent else "#1b3a6b",
                 "text": text,
                 "ts": time.strftime("%H:%M"),
@@ -256,7 +320,46 @@ class Room:
             self.messages.append(msg)
             if len(self.messages) > 400:
                 self.messages = self.messages[-300:]
+            if persist:
+                store.save_history(self.messages)
             return msg
+
+    def _find_msg(self, msg_id):
+        try:
+            mid = int(msg_id)
+        except (TypeError, ValueError):
+            return None
+        for msg in reversed(self.messages):
+            if msg["id"] == mid:
+                return msg
+        return None
+
+    def _set_reaction(self, msg, emoji, who, toggle=False):
+        if not msg or msg["kind"] not in ("user", "agent") or emoji not in REACTIONS:
+            return False
+        bucket = msg.setdefault("reactions", {})
+        names = bucket.setdefault(emoji, [])
+        if who in names:
+            if toggle:
+                names.remove(who)
+                if not names:
+                    bucket.pop(emoji, None)
+        else:
+            for other_em, other_names in list(bucket.items()):
+                if who in other_names:
+                    other_names.remove(who)
+                    if not other_names:
+                        bucket.pop(other_em, None)
+            bucket.setdefault(emoji, []).append(who)
+        return True
+
+    def react(self, msg_id, emoji):
+        with self.lock:
+            msg = self._find_msg(msg_id)
+            ok = self._set_reaction(msg, emoji, self.user_name or "SEN", toggle=True)
+            if ok:
+                store.save_history(self.messages)
+            return ok
 
     def live(self):
         return [a for a in self.agents.values() if a["enabled"]]
@@ -264,17 +367,36 @@ class Room:
     def _mentions(self, text):
         return [a["id"] for a in self.live() if _names_in(text, a["name"])]
 
-    def user_says(self, text):
-        text = text.strip()[:600]
-        if not text:
+    def user_says(self, text, reply_to=None, image=None):
+        text = (text or "").strip()[:600]
+        img = (
+            image
+            if isinstance(image, str)
+            and image.startswith("data:image/")
+            and len(image) <= 1200000
+            else None
+        )
+        if not text and not img:
             return
-        self._post("user", None, text)
+        with self.lock:
+            ref = self._find_msg(reply_to)
+            quote = _quote_dict(ref)
+            meta = {}
+            if quote:
+                meta["reply_to"] = quote
+            if img:
+                meta["image"] = img
+        self._post("user", None, text, meta or None)
         with self.lock:
             self.last_at = time.time()
             if self.frozen:
                 self.queue.clear()
                 return
             targets = self._mentions(text)
+            if ref and ref["kind"] == "agent" and ref.get("agent_id"):
+                aid = ref["agent_id"]
+                if aid in self.agents and self.agents[aid]["enabled"] and aid not in targets:
+                    targets.insert(0, aid)
             pool = [a["id"] for a in self.live() if a["id"] not in targets]
             random.shuffle(pool)
             extra = random.randint(0, 1) if targets else random.randint(1, 2)
@@ -329,6 +451,85 @@ class Room:
             "system", None, "Yeni konu: " + topic if topic else "Konu serbest kaldı."
         )
 
+    def _cast_vote(self, poll_msg, index, who, toggle=False):
+        if not poll_msg or poll_msg.get("kind") != "poll":
+            return False
+        opts = poll_msg.get("options") or []
+        if index < 0 or index >= len(opts):
+            return False
+        if who in opts[index]["votes"]:
+            if toggle:
+                opts[index]["votes"].remove(who)
+            return True
+        for opt in opts:
+            if who in opt["votes"]:
+                opt["votes"].remove(who)
+        opts[index]["votes"].append(who)
+        return True
+
+    def create_poll(self, question, options):
+        question = question.strip()[:160]
+        if not question:
+            return "soru bos"
+        cleaned = []
+        seen = set()
+        for raw in options:
+            if not isinstance(raw, str):
+                continue
+            val = raw.strip()[:70]
+            key = _fold(val)
+            if val and key not in seen:
+                seen.add(key)
+                cleaned.append(val)
+            if len(cleaned) >= 4:
+                break
+        if len(cleaned) < 2:
+            return "en az iki secenek gir"
+        with self.lock:
+            uname = self.user_name or "SEN"
+        self._post(
+            "poll",
+            None,
+            question,
+            {
+                "name": uname,
+                "options": [{"text": o, "votes": []} for o in cleaned],
+            },
+        )
+        with self.lock:
+            self.last_at = min(self.last_at, time.time() - 2)
+            if not self.frozen:
+                picks = [a["id"] for a in self.live()]
+                random.shuffle(picks)
+                self.queue.clear()
+                for pid in picks:
+                    self.queue.append(pid)
+        return None
+
+    def vote_poll(self, poll_id, option):
+        try:
+            idx = int(option)
+        except (TypeError, ValueError):
+            return False
+        with self.lock:
+            msg = self._find_msg(poll_id)
+            ok = self._cast_vote(msg, idx, self.user_name or "SEN", toggle=True)
+            if ok:
+                store.save_history(self.messages)
+            return ok
+
+    def _active_poll(self):
+        for msg in reversed(self.messages[-HISTORY:]):
+            if msg["kind"] == "poll":
+                return msg
+        return None
+
+    def _recent_image(self):
+        for msg in reversed(self.messages[-6:]):
+            if msg.get("image"):
+                return msg["image"]
+        return None
+
     def reset(self):
         with self.lock:
             self.epoch += 1
@@ -374,14 +575,22 @@ class Room:
 
     def _system_prompt(self, agent):
         others = [a["name"] for a in self.live() if a["id"] != agent["id"]]
+        uname = self.user_name or "KULLANICI"
+        custom = (
+            (agent.get("custom_prompt") or "").strip()
+            if agent.get("personality") == "ozel"
+            else ""
+        )
+        role = custom or personas.personality_prompt(agent.get("personality"))
         lines = [
-            'Adın %s. "%s" adlı bir WhatsApp grubundasın.' % (agent["name"], GROUP_NAME),
-            personas.personality_prompt(agent.get("personality"))
+            'Adın %s. "%s" adlı bir WhatsApp grubundasın.'
+            % (agent["name"], self.group_name),
+            role
             or "Sana verilmiş bir rol ya da karakter yok. Kendin gibi davran, kendi "
             "fikirlerini söyle, kendi mizahını kullan.",
             "Gruptakiler: " + (", ".join(others) if others else "şu an kimse yok"),
-            "Bir de KULLANICI var, grubu o kurdu, gerçek bir insan. Arada yazar, "
-            "yazmadığında grup kendi arasında konuşmaya devam eder.",
+            "Bir de %s var, grubu o kurdu, gerçek bir insan. Arada yazar, "
+            "yazmadığında grup kendi arasında konuşmaya devam eder." % uname,
             "",
             "Burası bir tartışma odası değil, sıradan bir arkadaş grubu. Her şeyden "
             "konuşulur: maç, yemek, dizi, oyun, uyku, hava, saçma sorular, eski "
@@ -398,28 +607,43 @@ class Room:
                 "bir şey kaldıysa üstünde kalmaya devam et."
             )
         acilan = None
+        acilan_img = False
         for msg in reversed(self.messages[-6:]):
             if msg["kind"] == "user":
                 acilan = msg["text"]
+                acilan_img = bool(msg.get("image"))
                 break
         sessiz = self._stale()
-        if acilan:
+        if acilan_img:
+            if acilan:
+                lines.append(
+                    '%s gruba bir fotoğraf attı ve şunu yazdı: "%s". Fotoğrafta '
+                    "gördüğün şeye ve yazdığına kendi tarzınla karşılık ver."
+                    % (uname, acilan[:160])
+                )
+            else:
+                lines.append(
+                    "%s gruba bir fotoğraf attı. Fotoğrafta gördüğün şeye kendi "
+                    "tarzınla yorum yap, şaka yap ya da soru sor." % uname
+                )
+        elif acilan:
             lines.append(
-                'Grupta şu an KULLANICI şunu attı ve bunun üstüne konuşuluyor: "%s". '
+                'Grupta şu an %s şunu attı ve bunun üstüne konuşuluyor: "%s". '
                 "Buna kendi tarzınla karşılık ver: fikrini söyle, şaka yap, bir "
                 "anını anlat ya da soru sor. Gerçekten katılmıyorsan karşı "
-                "çıkabilirsin ama zorunda değilsin." % acilan[:160]
+                "çıkabilirsin ama zorunda değilsin." % (uname, acilan[:160])
             )
         elif others:
             if sessiz >= USER_GAP:
                 lines.append(
-                    "KULLANICI bir süredir sohbete girmedi. Bu mesajda onu da içine "
+                    "%s bir süredir sohbete girmedi. Bu mesajda onu da içine "
                     "kat: adını anıp bir şey sor ya da daha önce yazdığına değin."
+                    % uname
                 )
             elif random.random() < 0.45:
                 lines.append(
-                    "Bu mesajda KULLANICI'ya dönme, ondan bahsetme. Gruptakilerden "
-                    "birine yaz: " + ", ".join(others)
+                    "Bu mesajda %s kişisine dönme, ondan bahsetme. Gruptakilerden "
+                    "birine yaz: %s" % (uname, ", ".join(others))
                 )
         nudge = self.nudges.get(agent["id"])
         if nudge:
@@ -427,6 +651,20 @@ class Room:
                 "Kullanıcı sana özelden şunu yazdı, bunu aynen tekrarlama ama "
                 "davranışına yansıt: " + nudge
             )
+        poll = self._active_poll()
+        if poll:
+            voted = any(agent["name"] in o["votes"] for o in poll["options"])
+            if not voted:
+                opt_line = "  ".join(
+                    "%d) %s" % (i + 1, o["text"])
+                    for i, o in enumerate(poll["options"])
+                )
+                lines.append(
+                    'Grupta açık bir anket var: "%s" (%s). Henüz oy vermedin. '
+                    "Mesajının en başına [OY:1] gibi seçtiğin numaranın etiketini "
+                    "yazarak oyunu kullan ve neden onu seçtiğini ya da diğerlerinin "
+                    "oyuna ne dediğini kendi tarzınla söyle." % (poll["text"], opt_line)
+                )
         lines += [
             "",
             "Nasıl yazılır:",
@@ -452,10 +690,12 @@ class Room:
             "bir şey söylemek, bir şeye gülüp geçmek de serbest.",
             "- Bu bir arkadaş grubu, kullanıcının danışma hattı değil. Ağırlıklı olarak "
             "gruptakilerle konuş, onlara laf at, onların dediğine cevap ver.",
-            "- KULLANICI'ya her mesajda dönme ama onu da yok sayma. Mesajlarının "
+            "- %s kişisine her mesajda dönme ama onu da yok sayma. Mesajlarının "
             "yaklaşık dörtte birinde ona dön: fikrini sor, yazdığına değin ya da "
-            "laf at. Kalanında gruptakilerle konuş.",
+            "laf at. Kalanında gruptakilerle konuş." % uname,
             "- Birine dönmek için @İSİM yaz.",
+            "- Geçmişteki belirli bir mesaja doğrudan yanıt veriyorsan en başa [#12] gibi o mesajın numarasını yazabilirsin; normal akışta yazmana gerek yok.",
+            "- Çok komik ya da saçma bulduğun bir mesaja ifade bırakmak istersen mesajının en sonuna {😂:#12} gibi tek bir tepki ekleyebilirsin (nadiren kullan; izin verilenler: 😂 💀 🔥 👍 👎 👀 ❤️ 🤡).",
             "- Kendini tekrarlama, başkasının yazdığını farklı kelimelerle tekrar yazma.",
         ]
         if self.web:
@@ -473,16 +713,47 @@ class Room:
         return "\n".join(lines)
 
     def _transcript(self, agent):
+        uname = self.user_name or "KULLANICI"
         rows = []
         for msg in self.messages[-HISTORY:]:
             if msg["kind"] == "whisper":
                 continue
             if msg["kind"] == "system":
                 rows.append("[grup] " + msg["text"])
-            elif msg["kind"] == "user":
-                rows.append("KULLANICI: " + msg["text"])
+            elif msg["kind"] == "poll":
+                summary = " | ".join(
+                    "%d) %s (%s)"
+                    % (
+                        i + 1,
+                        o["text"],
+                        ", ".join(o["votes"]) if o["votes"] else "oy yok",
+                    )
+                    for i, o in enumerate(msg.get("options") or [])
+                )
+                rows.append(
+                    '[anket #%d] %s sordu: "%s" -> %s'
+                    % (msg["id"], msg["name"], msg["text"], summary)
+                )
             else:
-                rows.append(msg["name"] + ": " + msg["text"])
+                who = uname if msg["kind"] == "user" else msg["name"]
+                rep = (
+                    " (-> %s)" % msg["reply_to"]["name"]
+                    if msg.get("reply_to")
+                    else ""
+                )
+                msg_text = msg.get("text") or ""
+                if msg.get("image"):
+                    msg_text = ("[fotoğraf] " + msg_text).strip()
+                rx = ""
+                if msg.get("reactions"):
+                    parts = [
+                        "%s %s" % (em, ",".join(us))
+                        for em, us in msg["reactions"].items()
+                        if us
+                    ]
+                    if parts:
+                        rx = " [tepki: " + " ".join(parts) + "]"
+                rows.append("[#%d] %s%s: %s%s" % (msg["id"], who, rep, msg_text, rx))
         body = "\n".join(rows) if rows else "[grup] Grup yeni kuruldu, kimse yazmadı."
         return (
             body
@@ -490,13 +761,21 @@ class Room:
             % agent["name"]
         )
 
-    def _after(self, agent, text):
+    def _after(self, agent, text, quoted_agent_id=None):
         with self.lock:
             self.last_at = time.time()
             lo, hi = TEMPO_GAPS.get(self.tempo, TEMPO_GAPS["normal"])
             if self.drama >= 2:
                 lo, hi = lo * 0.65, hi * 0.7
             self.gap = random.uniform(lo, hi)
+            if (
+                quoted_agent_id
+                and quoted_agent_id != agent["id"]
+                and quoted_agent_id not in self.queue
+                and quoted_agent_id in self.agents
+                and self.agents[quoted_agent_id]["enabled"]
+            ):
+                self.queue.append(quoted_agent_id)
             for other in self.live():
                 if other["id"] == agent["id"] or other["id"] in self.queue:
                     continue
@@ -546,20 +825,25 @@ class Room:
             nudge = self.nudges.get(agent["id"])
             system = self._system_prompt(agent)
             transcript = self._transcript(agent)
+            recent_img = self._recent_image()
             snapshot = dict(agent)
             snapshot["web"] = self.web
 
         try:
-            raw = providers.generate(snapshot, system, transcript)
-            text = _clean(raw, snapshot["name"])
+            raw = providers.generate(snapshot, system, transcript, image=recent_img)
+            text, reply_id, rxs, vote_num = _parse_actions(raw, snapshot["name"])
             if not text or _looks_meta(text):
                 raw = providers.generate(
                     snapshot,
                     system,
                     transcript + "\n\nDusunme, plan yapma, kurallari tekrarlama, "
                     "ne yazacagini anlatma. Dogrudan gruba dusecek tek mesaji yaz.",
+                    image=recent_img,
                 )
-                text = _clean(raw, snapshot["name"])
+                text, reply_id2, rxs2, vote_num2 = _parse_actions(raw, snapshot["name"])
+                reply_id = reply_id2 or reply_id
+                rxs = rxs2 or rxs
+                vote_num = vote_num2 or vote_num
                 if _looks_meta(text):
                     text = ""
             with self.lock:
@@ -575,8 +859,44 @@ class Room:
                 agent["status"] = "hazir"
                 if nudge and self.nudges.get(agent["id"]) == nudge:
                     del self.nudges[agent["id"]]
-                self._post("agent", agent, text)
-                self._after(agent, text)
+                poll = self._active_poll()
+                if poll and not any(
+                    agent["name"] in o["votes"] for o in poll["options"]
+                ):
+                    if vote_num and 1 <= vote_num <= len(poll["options"]):
+                        self._cast_vote(poll, vote_num - 1, agent["name"])
+                    else:
+                        folded = _fold(text)
+                        hits = [
+                            i
+                            for i, o in enumerate(poll["options"])
+                            if _fold(o["text"]) in folded
+                        ]
+                        if len(hits) == 1:
+                            self._cast_vote(poll, hits[0], agent["name"])
+                for em, mid in rxs[:2]:
+                    target = self._find_msg(mid)
+                    if target and target.get("agent_id") != agent["id"]:
+                        self._set_reaction(target, em, agent["name"], toggle=False)
+                last_chat = None
+                for prev in reversed(self.messages):
+                    if prev["kind"] in ("user", "agent"):
+                        last_chat = prev["id"]
+                        break
+                quote = None
+                quoted_aid = None
+                if reply_id:
+                    ref = self._find_msg(reply_id)
+                    if (
+                        ref
+                        and ref.get("agent_id") != agent["id"]
+                        and (ref["id"] != last_chat or ref["kind"] == "user")
+                    ):
+                        quote = _quote_dict(ref)
+                        quoted_aid = ref.get("agent_id")
+                meta = {"reply_to": quote} if quote else None
+                self._post("agent", agent, text, meta)
+                self._after(agent, text, quoted_aid)
         except providers.ProviderError as err:
             code = _code(err)
             with self.lock:
@@ -631,6 +951,9 @@ class Room:
                 "tempo": self.tempo,
                 "drama": self.drama,
                 "web": self.web,
+                "sound": self.sound,
+                "group_name": self.group_name,
+                "user_name": self.user_name,
             }
             agents = OrderedDict((aid, dict(a)) for aid, a in self.agents.items())
         store.save(agents, room)
@@ -640,7 +963,7 @@ class Room:
         if not agent:
             return None
         with self.lock:
-            had_key = bool(agent["api_key"])
+            had_creds = _usable(agent)
             if "provider" in data and data["provider"] in personas.PROVIDER_LABELS:
                 agent["provider"] = data["provider"]
             if "personality" in data:
@@ -648,6 +971,8 @@ class Room:
                 agent["personality"] = (
                     pid if personas.personality_allowed(pid, agent_id) else ""
                 )
+            if "custom_prompt" in data and isinstance(data["custom_prompt"], str):
+                agent["custom_prompt"] = data["custom_prompt"].strip()[:360]
             for field in ("model", "base_url"):
                 if field in data and isinstance(data[field], str):
                     agent[field] = data[field].strip()
@@ -659,13 +984,24 @@ class Room:
                 agent["enabled"] = bool(data["enabled"])
             agent["fails"] = 0
             agent["cooldown"] = 0
-            if agent["api_key"]:
+            if _usable(agent):
                 agent["status"] = "hazir"
-                if "enabled" not in data and not had_key:
+                if "enabled" not in data and not had_creds:
                     agent["enabled"] = True
             else:
                 agent["status"] = "anahtar yok"
                 agent["enabled"] = False
+            if data.get("share_key") and agent["api_key"]:
+                for other in self.agents.values():
+                    if other["id"] == agent_id or other["provider"] != agent["provider"]:
+                        continue
+                    was_empty = not other["api_key"]
+                    other["api_key"] = agent["api_key"]
+                    other["fails"] = 0
+                    other["cooldown"] = 0
+                    other["status"] = "hazir"
+                    if was_empty:
+                        other["enabled"] = True
             if not agent["enabled"]:
                 self.nudges.pop(agent_id, None)
             result = {"status": agent["status"], "enabled": agent["enabled"]}
@@ -721,7 +1057,72 @@ class Room:
                     pass
             if "web" in data:
                 self.web = bool(data["web"])
+            if "sound" in data:
+                self.sound = bool(data["sound"])
+            if "group_name" in data and isinstance(data["group_name"], str):
+                self.group_name = data["group_name"].strip()[:40] or GROUP_NAME
+            if "user_name" in data and isinstance(data["user_name"], str):
+                self.user_name = data["user_name"].strip()[:24]
         self._persist()
+
+    def export_text(self):
+        with self.lock:
+            gname = self.group_name
+            uname = self.user_name or "SEN"
+            msgs = list(self.messages)
+        lines = [
+            "%s - Sohbet Kaydi (%s)" % (gname, time.strftime("%Y-%m-%d %H:%M")),
+            "=" * 44,
+            "",
+        ]
+        for msg in msgs:
+            ts = msg.get("ts") or "--:--"
+            kind = msg.get("kind")
+            if kind == "system":
+                lines.append("[%s] * %s" % (ts, msg.get("text", "")))
+            elif kind == "whisper":
+                lines.append(
+                    "[%s] (%s) %s"
+                    % (ts, msg.get("name", "OZEL"), msg.get("text", ""))
+                )
+            elif kind == "poll":
+                lines.append(
+                    "[%s] [ANKET - %s] %s"
+                    % (ts, msg.get("name", uname), msg.get("text", ""))
+                )
+                for opt in msg.get("options") or []:
+                    votes = opt.get("votes") or []
+                    voters = " (%s)" % ", ".join(votes) if votes else ""
+                    lines.append(
+                        "    - %s: %d oy%s"
+                        % (opt.get("text", ""), len(votes), voters)
+                    )
+            else:
+                who = (
+                    (msg.get("name") or uname)
+                    if kind == "user"
+                    else msg.get("name", "?")
+                )
+                rep = (
+                    " (-> %s)" % msg["reply_to"]["name"]
+                    if msg.get("reply_to")
+                    else ""
+                )
+                body = msg.get("text", "")
+                if msg.get("image"):
+                    body = ("[fotoğraf] " + body).strip()
+                rx = ""
+                if msg.get("reactions"):
+                    parts = [
+                        "%s %s" % (em, ",".join(us))
+                        for em, us in msg["reactions"].items()
+                        if us
+                    ]
+                    if parts:
+                        rx = "  [" + " | ".join(parts) + "]"
+                lines.append("[%s] %s%s: %s%s" % (ts, who, rep, body, rx))
+        lines.append("")
+        return "\n".join(lines)
 
     def snapshot(self, since):
         with self.lock:
@@ -738,20 +1139,23 @@ class Room:
                         "base_url": a["base_url"],
                         "default_base": providers.DEFAULT_BASES.get(a["provider"], ""),
                         "personality": a.get("personality", ""),
+                        "custom_prompt": a.get("custom_prompt", ""),
                         "personality_label": personas.personality_label(
                             a.get("personality", "")
                         ),
                         "color": a["color"],
                         "enabled": a["enabled"],
                         "status": a["status"],
-                        "has_key": bool(a["api_key"]),
+                        "has_key": _usable(a),
+                        "raw_key": bool(a["api_key"]),
                         "svg": a["svg"],
                     }
                 )
             return {
                 "seq": self.seq,
                 "epoch": self.epoch,
-                "group": GROUP_NAME,
+                "group": self.group_name,
+                "user_name": self.user_name,
                 "bases": providers.DEFAULT_BASES,
                 "personalities": [
                     {
@@ -762,6 +1166,17 @@ class Room:
                     for item in personas.PERSONALITIES
                 ],
                 "messages": fresh,
+                "reactions": {
+                    str(m["id"]): m["reactions"]
+                    for m in self.messages
+                    if m.get("reactions")
+                },
+                "polls": {
+                    str(m["id"]): m["options"]
+                    for m in self.messages
+                    if m["kind"] == "poll"
+                },
+                "reaction_set": list(REACTIONS),
                 "agents": agents,
                 "typing": self.typing,
                 "auto": self.auto,
@@ -769,5 +1184,6 @@ class Room:
                 "tempo": self.tempo,
                 "drama": self.drama,
                 "web": self.web,
+                "sound": self.sound,
                 "topic": self.topic,
             }
