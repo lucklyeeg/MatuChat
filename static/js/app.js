@@ -24,6 +24,7 @@ const PROVIDERS = [
   ["deepseek", "DeepSeek"],
   ["mistral", "Mistral"],
   ["openrouter", "OpenRouter"],
+  ["ollama", "Ollama (Yerel)"],
   ["custom", "Ozel adres (OpenAI uyumlu)"],
 ];
 
@@ -321,7 +322,8 @@ function openSettings(focusId) {
       </div>
       <div class="field">
         <label>API ANAHTARI</label>
-        <input data-f="api_key" type="password" placeholder="${a.has_key ? "kayitli, degistirmek icin yaz" : "anahtari buraya yapistir"}">
+        <input data-f="api_key" type="password" placeholder="${a.raw_key ? "kayitli, degistirmek icin yaz" : (a.provider === "ollama" || a.provider === "custom" ? "yerel sunucuda bos birakilabilir" : "anahtari buraya yapistir")}">
+        <label class="chk"><input type="checkbox" data-f="share_key"> ayni saglayicidaki diger karakterlere de uygula</label>
       </div>
       <div class="probe hidden"></div>
       <div class="cfg-actions">
@@ -350,14 +352,22 @@ function openSettings(focusId) {
         base_url: val("base_url"),
         personality: val("personality"),
         api_key: val("api_key"),
+        share_key: box.querySelector('[data-f="share_key"]').checked,
       };
       if (join) body.enabled = true;
       return body;
     };
 
     box.querySelector('[data-f="provider"]').onchange = (e) => {
+      const p = e.target.value;
       const base = box.querySelector('[data-f="base_url"]');
-      base.placeholder = (bases && bases[e.target.value]) || "kendi adresini yaz";
+      const keyInput = box.querySelector('[data-f="api_key"]');
+      base.placeholder = (bases && bases[p]) || "kendi adresini yaz";
+      if (!findAgent(id)?.raw_key) {
+        keyInput.placeholder = p === "ollama" || p === "custom"
+          ? "yerel sunucuda bos birakilabilir"
+          : "anahtari buraya yapistir";
+      }
     };
 
     box.querySelector('[data-act="models"]').onclick = async (e) => {
@@ -399,7 +409,8 @@ function openSettings(focusId) {
     };
 
     box.querySelector('[data-act="save"]').onclick = async () => {
-      const res = await post("/api/agent/" + id, payload(true));
+      const sent = payload(true);
+      const res = await post("/api/agent/" + id, sent);
       rosterSig = "";
       probe.className = "probe " + (res.ok ? "" : "bad");
       probe.textContent = !res.ok
@@ -412,6 +423,15 @@ function openSettings(focusId) {
         const keyInput = box.querySelector('[data-f="api_key"]');
         if (keyInput.value.trim()) keyInput.placeholder = "kayitli, degistirmek icin yaz";
         keyInput.value = "";
+        if (sent.share_key) {
+          modalBody.querySelectorAll(".cfg").forEach((peer) => {
+            if (peer === box || peer.querySelector('[data-f="provider"]').value !== sent.provider) return;
+            const tb = peer.querySelector('[data-act="toggle"]');
+            tb.textContent = "GRUPTAN CIKAR";
+            tb.classList.remove("hot");
+            peer.querySelector('[data-f="api_key"]').placeholder = "kayitli, degistirmek icin yaz";
+          });
+        }
       }
       poll();
     };

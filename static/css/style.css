@@ -507,6 +507,18 @@ body {
 .field input::placeholder { color: #6b74a8; }
 .field textarea { resize: vertical; min-height: 78px; line-height: 1.4; }
 .field .hint { font-family: Consolas, monospace; font-size: 10px; color: var(--dim); }
+.field .chk {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: Consolas, monospace;
+  font-size: 11px;
+  color: var(--dim);
+  letter-spacing: 0;
+  margin-top: 2px;
+  cursor: pointer;
+}
+.field .chk input { margin: 0; accent-color: var(--royal); }
 
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
 

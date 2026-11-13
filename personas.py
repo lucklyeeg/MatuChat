@@ -442,6 +442,7 @@ PROVIDER_LABELS = {
     "mistral": "MISTRAL",
     "groq": "GROQ",
     "openrouter": "OPENROUTER",
+    "ollama": "OLLAMA",
     "custom": "OZEL ADRES",
 }
 

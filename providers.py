@@ -9,7 +9,10 @@ OPENAI_BASES = {
     "deepseek": "https://api.deepseek.com/v1",
     "mistral": "https://api.mistral.ai/v1",
     "openrouter": "https://openrouter.ai/api/v1",
+    "ollama": "http://127.0.0.1:11434/v1",
 }
+
+KEYLESS = ("ollama", "custom")
 
 DEFAULT_BASES = dict(OPENAI_BASES)
 DEFAULT_BASES["anthropic"] = "https://api.anthropic.com"
@@ -17,8 +20,14 @@ DEFAULT_BASES["gemini"] = "https://generativelanguage.googleapis.com"
 DEFAULT_BASES["custom"] = ""
 
 
+def needs_key(agent):
+    return agent.get("provider") not in KEYLESS
+
+
 def base_for(agent):
     given = (agent.get("base_url") or "").strip().rstrip("/")
+    if agent.get("provider") == "ollama" and given and not given.endswith("/v1"):
+        given += "/v1"
     return given or DEFAULT_BASES.get(agent.get("provider"), "")
 
 
@@ -81,7 +90,7 @@ def _get(url, headers):
 
 
 def list_models(agent):
-    if not agent.get("api_key"):
+    if needs_key(agent) and not agent.get("api_key"):
         raise ProviderError("API anahtari yok")
     base = base_for(agent)
     if not base:
@@ -102,7 +111,8 @@ def list_models(agent):
                 continue
             names.append(m.get("name", "").split("/")[-1])
     else:
-        data = _get(base + "/models", {"Authorization": "Bearer " + agent["api_key"]})
+        headers = {"Authorization": "Bearer " + agent["api_key"]} if agent.get("api_key") else {}
+        data = _get(base + "/models", headers)
         rows = data.get("data")
         if not isinstance(rows, list):
             rows = data.get("models") or []
@@ -199,10 +209,9 @@ def _is_reasoner(model):
 
 def _openai_compatible(agent, system, user_text, base):
     url = base.rstrip("/") + "/chat/completions"
-    headers = {
-        "Authorization": "Bearer " + agent["api_key"],
-        "Content-Type": "application/json",
-    }
+    headers = {"Content-Type": "application/json"}
+    if agent.get("api_key"):
+        headers["Authorization"] = "Bearer " + agent["api_key"]
     payload = {
         "model": agent["model"],
         "temperature": agent["temperature"],
@@ -291,7 +300,7 @@ def _gemini(agent, system, user_text, base):
 
 def generate(agent, system, user_text):
     provider = agent["provider"]
-    if not agent.get("api_key"):
+    if needs_key(agent) and not agent.get("api_key"):
         raise ProviderError("API anahtari yok")
     base = base_for(agent)
     if not base:

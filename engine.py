@@ -180,6 +180,16 @@ def _clean(text, name):
     return text
 
 
+def _usable(agent):
+    if agent.get("api_key"):
+        return True
+    if agent.get("provider") == "ollama":
+        return True
+    if agent.get("provider") == "custom" and (agent.get("base_url") or "").strip():
+        return True
+    return False
+
+
 class Room:
     def __init__(self):
         self.lock = threading.RLock()
@@ -200,9 +210,10 @@ class Room:
                 str(spec.get("personality") or ""), spec["id"]
             ):
                 spec["personality"] = ""
-            wanted = bool(kept["enabled"]) if "enabled" in kept else True
-            spec["enabled"] = wanted and bool(spec["api_key"])
-            spec["status"] = "hazir" if spec["api_key"] else "anahtar yok"
+            ok = _usable(spec)
+            wanted = bool(kept["enabled"]) if "enabled" in kept else bool(spec["api_key"])
+            spec["enabled"] = wanted and ok
+            spec["status"] = "hazir" if ok else "anahtar yok"
             spec["fails"] = 0
             spec["cooldown"] = 0
             self.agents[spec["id"]] = spec
@@ -640,7 +651,7 @@ class Room:
         if not agent:
             return None
         with self.lock:
-            had_key = bool(agent["api_key"])
+            had_creds = _usable(agent)
             if "provider" in data and data["provider"] in personas.PROVIDER_LABELS:
                 agent["provider"] = data["provider"]
             if "personality" in data:
@@ -659,13 +670,24 @@ class Room:
                 agent["enabled"] = bool(data["enabled"])
             agent["fails"] = 0
             agent["cooldown"] = 0
-            if agent["api_key"]:
+            if _usable(agent):
                 agent["status"] = "hazir"
-                if "enabled" not in data and not had_key:
+                if "enabled" not in data and not had_creds:
                     agent["enabled"] = True
             else:
                 agent["status"] = "anahtar yok"
                 agent["enabled"] = False
+            if data.get("share_key") and agent["api_key"]:
+                for other in self.agents.values():
+                    if other["id"] == agent_id or other["provider"] != agent["provider"]:
+                        continue
+                    was_empty = not other["api_key"]
+                    other["api_key"] = agent["api_key"]
+                    other["fails"] = 0
+                    other["cooldown"] = 0
+                    other["status"] = "hazir"
+                    if was_empty:
+                        other["enabled"] = True
             if not agent["enabled"]:
                 self.nudges.pop(agent_id, None)
             result = {"status": agent["status"], "enabled": agent["enabled"]}
@@ -744,7 +766,8 @@ class Room:
                         "color": a["color"],
                         "enabled": a["enabled"],
                         "status": a["status"],
-                        "has_key": bool(a["api_key"]),
+                        "has_key": _usable(a),
+                        "raw_key": bool(a["api_key"]),
                         "svg": a["svg"],
                     }
                 )
