@@ -206,6 +206,7 @@ class Room:
                 if field in kept and kept[field] is not None:
                     spec[field] = kept[field]
             spec["api_key"] = str(spec.get("api_key") or "")
+            spec["custom_prompt"] = str(spec.get("custom_prompt") or "").strip()[:360]
             if not personas.personality_allowed(
                 str(spec.get("personality") or ""), spec["id"]
             ):
@@ -228,6 +229,8 @@ class Room:
         except (TypeError, ValueError):
             self.drama = 1
         self.web = bool(saved_room.get("web", True))
+        self.group_name = str(saved_room.get("group_name") or "").strip()[:40] or GROUP_NAME
+        self.user_name = str(saved_room.get("user_name") or "").strip()[:24]
         self.epoch = int(time.time() * 1000)
         self.topic = ""
         self.queue = deque()
@@ -253,11 +256,12 @@ class Room:
     def _post(self, kind, agent, text, meta=None):
         with self.lock:
             self.seq += 1
+            uname = self.user_name or "SEN"
             msg = {
                 "id": self.seq,
                 "kind": kind,
                 "agent_id": agent["id"] if agent else None,
-                "name": agent["name"] if agent else ("SEN" if kind == "user" else "ODA"),
+                "name": agent["name"] if agent else (uname if kind == "user" else "ODA"),
                 "color": agent["color"] if agent else "#1b3a6b",
                 "text": text,
                 "ts": time.strftime("%H:%M"),
@@ -385,14 +389,22 @@ class Room:
 
     def _system_prompt(self, agent):
         others = [a["name"] for a in self.live() if a["id"] != agent["id"]]
+        uname = self.user_name or "KULLANICI"
+        custom = (
+            (agent.get("custom_prompt") or "").strip()
+            if agent.get("personality") == "ozel"
+            else ""
+        )
+        role = custom or personas.personality_prompt(agent.get("personality"))
         lines = [
-            'Adın %s. "%s" adlı bir WhatsApp grubundasın.' % (agent["name"], GROUP_NAME),
-            personas.personality_prompt(agent.get("personality"))
+            'Adın %s. "%s" adlı bir WhatsApp grubundasın.'
+            % (agent["name"], self.group_name),
+            role
             or "Sana verilmiş bir rol ya da karakter yok. Kendin gibi davran, kendi "
             "fikirlerini söyle, kendi mizahını kullan.",
             "Gruptakiler: " + (", ".join(others) if others else "şu an kimse yok"),
-            "Bir de KULLANICI var, grubu o kurdu, gerçek bir insan. Arada yazar, "
-            "yazmadığında grup kendi arasında konuşmaya devam eder.",
+            "Bir de %s var, grubu o kurdu, gerçek bir insan. Arada yazar, "
+            "yazmadığında grup kendi arasında konuşmaya devam eder." % uname,
             "",
             "Burası bir tartışma odası değil, sıradan bir arkadaş grubu. Her şeyden "
             "konuşulur: maç, yemek, dizi, oyun, uyku, hava, saçma sorular, eski "
@@ -416,21 +428,22 @@ class Room:
         sessiz = self._stale()
         if acilan:
             lines.append(
-                'Grupta şu an KULLANICI şunu attı ve bunun üstüne konuşuluyor: "%s". '
+                'Grupta şu an %s şunu attı ve bunun üstüne konuşuluyor: "%s". '
                 "Buna kendi tarzınla karşılık ver: fikrini söyle, şaka yap, bir "
                 "anını anlat ya da soru sor. Gerçekten katılmıyorsan karşı "
-                "çıkabilirsin ama zorunda değilsin." % acilan[:160]
+                "çıkabilirsin ama zorunda değilsin." % (uname, acilan[:160])
             )
         elif others:
             if sessiz >= USER_GAP:
                 lines.append(
-                    "KULLANICI bir süredir sohbete girmedi. Bu mesajda onu da içine "
+                    "%s bir süredir sohbete girmedi. Bu mesajda onu da içine "
                     "kat: adını anıp bir şey sor ya da daha önce yazdığına değin."
+                    % uname
                 )
             elif random.random() < 0.45:
                 lines.append(
-                    "Bu mesajda KULLANICI'ya dönme, ondan bahsetme. Gruptakilerden "
-                    "birine yaz: " + ", ".join(others)
+                    "Bu mesajda %s kişisine dönme, ondan bahsetme. Gruptakilerden "
+                    "birine yaz: %s" % (uname, ", ".join(others))
                 )
         nudge = self.nudges.get(agent["id"])
         if nudge:
@@ -463,9 +476,9 @@ class Room:
             "bir şey söylemek, bir şeye gülüp geçmek de serbest.",
             "- Bu bir arkadaş grubu, kullanıcının danışma hattı değil. Ağırlıklı olarak "
             "gruptakilerle konuş, onlara laf at, onların dediğine cevap ver.",
-            "- KULLANICI'ya her mesajda dönme ama onu da yok sayma. Mesajlarının "
+            "- %s kişisine her mesajda dönme ama onu da yok sayma. Mesajlarının "
             "yaklaşık dörtte birinde ona dön: fikrini sor, yazdığına değin ya da "
-            "laf at. Kalanında gruptakilerle konuş.",
+            "laf at. Kalanında gruptakilerle konuş." % uname,
             "- Birine dönmek için @İSİM yaz.",
             "- Kendini tekrarlama, başkasının yazdığını farklı kelimelerle tekrar yazma.",
         ]
@@ -484,6 +497,7 @@ class Room:
         return "\n".join(lines)
 
     def _transcript(self, agent):
+        uname = self.user_name or "KULLANICI"
         rows = []
         for msg in self.messages[-HISTORY:]:
             if msg["kind"] == "whisper":
@@ -491,7 +505,7 @@ class Room:
             if msg["kind"] == "system":
                 rows.append("[grup] " + msg["text"])
             elif msg["kind"] == "user":
-                rows.append("KULLANICI: " + msg["text"])
+                rows.append(uname + ": " + msg["text"])
             else:
                 rows.append(msg["name"] + ": " + msg["text"])
         body = "\n".join(rows) if rows else "[grup] Grup yeni kuruldu, kimse yazmadı."
@@ -642,6 +656,8 @@ class Room:
                 "tempo": self.tempo,
                 "drama": self.drama,
                 "web": self.web,
+                "group_name": self.group_name,
+                "user_name": self.user_name,
             }
             agents = OrderedDict((aid, dict(a)) for aid, a in self.agents.items())
         store.save(agents, room)
@@ -659,6 +675,8 @@ class Room:
                 agent["personality"] = (
                     pid if personas.personality_allowed(pid, agent_id) else ""
                 )
+            if "custom_prompt" in data and isinstance(data["custom_prompt"], str):
+                agent["custom_prompt"] = data["custom_prompt"].strip()[:360]
             for field in ("model", "base_url"):
                 if field in data and isinstance(data[field], str):
                     agent[field] = data[field].strip()
@@ -743,6 +761,10 @@ class Room:
                     pass
             if "web" in data:
                 self.web = bool(data["web"])
+            if "group_name" in data and isinstance(data["group_name"], str):
+                self.group_name = data["group_name"].strip()[:40] or GROUP_NAME
+            if "user_name" in data and isinstance(data["user_name"], str):
+                self.user_name = data["user_name"].strip()[:24]
         self._persist()
 
     def snapshot(self, since):
@@ -760,6 +782,7 @@ class Room:
                         "base_url": a["base_url"],
                         "default_base": providers.DEFAULT_BASES.get(a["provider"], ""),
                         "personality": a.get("personality", ""),
+                        "custom_prompt": a.get("custom_prompt", ""),
                         "personality_label": personas.personality_label(
                             a.get("personality", "")
                         ),
@@ -774,7 +797,8 @@ class Room:
             return {
                 "seq": self.seq,
                 "epoch": self.epoch,
-                "group": GROUP_NAME,
+                "group": self.group_name,
+                "user_name": self.user_name,
                 "bases": providers.DEFAULT_BASES,
                 "personalities": [
                     {

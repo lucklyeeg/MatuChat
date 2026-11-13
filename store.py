@@ -5,8 +5,16 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 PATH = os.path.join(HERE, "ayarlar.json")
 
-AGENT_FIELDS = ("provider", "model", "base_url", "personality", "api_key", "enabled")
-ROOM_FIELDS = ("auto", "tempo", "drama", "web")
+AGENT_FIELDS = (
+    "provider",
+    "model",
+    "base_url",
+    "personality",
+    "custom_prompt",
+    "api_key",
+    "enabled",
+)
+ROOM_FIELDS = ("auto", "tempo", "drama", "web", "group_name", "user_name")
 
 
 def load():

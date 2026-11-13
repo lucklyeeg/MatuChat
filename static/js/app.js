@@ -40,6 +40,9 @@ let drama = 1;
 let web = true;
 let auto = true;
 let frozen = false;
+let groupName = "ORTAK ODA";
+let userName = "";
+let currentTopic = "";
 
 function esc(s) {
   return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -58,7 +61,7 @@ function atBottom() {
 }
 
 function renderRoster() {
-  const sig = JSON.stringify(agents.map((a) => [a.id, a.enabled, a.has_key, a.status, a.provider_label, a.personality_label]));
+  const sig = JSON.stringify([userName, agents.map((a) => [a.id, a.enabled, a.has_key, a.status, a.provider_label, a.personality_label])]);
   if (sig === rosterSig) return;
   rosterSig = sig;
   agentList.innerHTML = "";
@@ -82,8 +85,9 @@ function renderRoster() {
   const live = agents.filter((a) => a.enabled);
   roomBadge.textContent = live.length + " AI";
   document.getElementById("setupHint").classList.toggle("hidden", live.length > 0);
+  const meTag = userName ? userName.toLowerCase() : "sen";
   document.getElementById("memberLine").textContent = live.length
-    ? live.map((a) => a.name.toLowerCase()).join(", ") + ", sen"
+    ? live.map((a) => a.name.toLowerCase()).join(", ") + ", " + meTag
     : "grupta senden baska kimse yok";
   const faces = document.getElementById("headFaces");
   faces.innerHTML = "";
@@ -126,7 +130,7 @@ function renderMessage(m) {
     row.className = "row me" + (chained ? " cont" : "");
     row.innerHTML = `
       <div class="bubble">
-        <div class="head"><span>SEN</span><span class="time">${esc(m.ts)}<span class="tick">&#10003;&#10003;</span></span></div>
+        <div class="head"><span>${esc(m.name || userName || "SEN")}</span><span class="time">${esc(m.ts)}<span class="tick">&#10003;&#10003;</span></span></div>
         <div class="body">${highlight(m.text)}</div>
       </div>`;
   } else {
@@ -221,6 +225,9 @@ async function pollOnce() {
     agents = data.agents;
     bases = data.bases || bases;
     personalities = data.personalities || personalities;
+    groupName = data.group || "ORTAK ODA";
+    userName = data.user_name || "";
+    currentTopic = data.topic || "";
     renderRoster();
     const stick = atBottom();
     const fresh = data.messages.filter((m) => m.id > since);
@@ -253,8 +260,8 @@ async function pollOnce() {
     webBtn.textContent = "INTERNET: " + (web ? "ACIK" : "KAPALI");
     webBtn.classList.toggle("hot", !web);
     renderDrama();
-    topicLine.textContent = data.topic ? "konu: " + data.topic : "konu serbest";
-    document.getElementById("groupName").textContent = data.group || "GRUP";
+    topicLine.textContent = currentTopic ? "konu: " + currentTopic : "konu serbest";
+    document.getElementById("groupName").textContent = groupName;
     statusText.textContent = frozen
       ? "sohbet durduruldu, kimse yazmiyor"
       : auto
@@ -320,6 +327,10 @@ function openSettings(focusId) {
         </select>
         <span class="hint">davranisini ve yazma stilini belirler</span>
       </div>
+      <div class="field custom-p ${a.personality === "ozel" ? "" : "hidden"}">
+        <label>OZEL KISILIK TARIFI</label>
+        <textarea data-f="custom_prompt" maxlength="360" placeholder="ornek: her konuyu futbola baglayan mahalle abisi">${esc(a.custom_prompt || "")}</textarea>
+      </div>
       <div class="field">
         <label>API ANAHTARI</label>
         <input data-f="api_key" type="password" placeholder="${a.raw_key ? "kayitli, degistirmek icin yaz" : (a.provider === "ollama" || a.provider === "custom" ? "yerel sunucuda bos birakilabilir" : "anahtari buraya yapistir")}">
@@ -351,11 +362,16 @@ function openSettings(focusId) {
         model: val("model"),
         base_url: val("base_url"),
         personality: val("personality"),
+        custom_prompt: val("custom_prompt"),
         api_key: val("api_key"),
         share_key: box.querySelector('[data-f="share_key"]').checked,
       };
       if (join) body.enabled = true;
       return body;
+    };
+
+    box.querySelector('[data-f="personality"]').onchange = (e) => {
+      box.querySelector(".custom-p").classList.toggle("hidden", e.target.value !== "ozel");
     };
 
     box.querySelector('[data-f="provider"]').onchange = (e) => {
@@ -532,21 +548,58 @@ function openFitne() {
   });
 }
 
+function openProfile() {
+  openModal("ODA VE ISIM", `
+    <div class="field">
+      <label>GRUP ADI</label>
+      <input id="gNameIn" maxlength="40" value="${esc(groupName)}" placeholder="ORTAK ODA">
+    </div>
+    <div class="field">
+      <label>SENIN ADIN</label>
+      <input id="uNameIn" maxlength="24" value="${esc(userName)}" placeholder="bos birakirsan SEN gorunur">
+      <span class="hint">karakterler grupta sana bu isimle seslenir</span>
+    </div>
+    <div class="modal-actions">
+      <button class="pxbtn send" id="profSave">KAYDET</button>
+    </div>`);
+  const gIn = document.getElementById("gNameIn");
+  const uIn = document.getElementById("uNameIn");
+  const saveBtn = document.getElementById("profSave");
+  uIn.focus();
+  saveBtn.onclick = async () => {
+    await post("/api/control", { group_name: gIn.value, user_name: uIn.value });
+    rosterSig = "";
+    closeModal();
+    poll();
+  };
+  [gIn, uIn].forEach((el) => {
+    el.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") saveBtn.click();
+    });
+  });
+}
+
 function openTopic() {
   openModal("KONU AC", `
     <div class="field">
       <label>ODANIN KONUSU</label>
-      <input id="tText" placeholder="ornek: ananasli pizza suc mu">
+      <input id="tText" value="${esc(currentTopic)}" placeholder="ornek: ananasli pizza suc mu">
       <span class="hint">bos birakip kaydedersen konu serbest kalir</span>
     </div>
     <div class="modal-actions">
       <button class="pxbtn send" id="tSend">AC</button>
     </div>`);
-  document.getElementById("tSend").onclick = async () => {
-    await post("/api/topic", { topic: document.getElementById("tText").value });
+  const tIn = document.getElementById("tText");
+  const tBtn = document.getElementById("tSend");
+  tIn.focus();
+  tBtn.onclick = async () => {
+    await post("/api/topic", { topic: tIn.value });
     closeModal();
     poll();
   };
+  tIn.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") tBtn.click();
+  });
 }
 
 function openPoke() {
@@ -619,6 +672,8 @@ document.getElementById("resetBtn").onclick = async () => {
 };
 
 document.getElementById("settingsBtn").onclick = () => openSettings();
+document.getElementById("profileBtn").onclick = openProfile;
+document.querySelector(".ghead-text").onclick = openProfile;
 document.getElementById("fitneBtn").onclick = openFitne;
 document.getElementById("topicBtn").onclick = openTopic;
 document.getElementById("pokeBtn").onclick = openPoke;
