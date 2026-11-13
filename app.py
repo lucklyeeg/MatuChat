@@ -66,6 +66,22 @@ def topic():
     return jsonify({"ok": True})
 
 
+@app.post("/api/poll")
+def poll_create():
+    data = request.get_json(silent=True) or {}
+    error = room.create_poll(str(data.get("question", "")), data.get("options") or [])
+    if error:
+        return jsonify({"ok": False, "error": error}), 400
+    return jsonify({"ok": True})
+
+
+@app.post("/api/poll/vote")
+def poll_vote():
+    data = request.get_json(silent=True) or {}
+    ok = room.vote_poll(data.get("poll_id"), data.get("option"))
+    return jsonify({"ok": ok})
+
+
 @app.post("/api/control")
 def control():
     room.control(request.get_json(silent=True) or {})

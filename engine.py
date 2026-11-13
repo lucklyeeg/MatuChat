@@ -181,6 +181,11 @@ def _quote_dict(msg):
 
 def _parse_actions(raw, name):
     raw = _strip_reasoning((raw or "").strip())
+    vote_num = None
+    vm = re.search(r"\[\s*oy\s*:\s*(\d+)\s*\]", raw, flags=re.I)
+    if vm:
+        vote_num = int(vm.group(1))
+    raw = re.sub(r"\[\s*oy\s*:\s*\d+\s*\]", " ", raw, flags=re.I)
     rxs = []
     for em, mid in re.findall(r"\{\s*([^\s:{}]+)\s*:\s*#?(\d+)\s*\}", raw):
         if em in REACTIONS:
@@ -192,7 +197,7 @@ def _parse_actions(raw, name):
     if lead:
         reply_id = int(lead.group(1))
     raw = re.sub(r"^\s*(?:\[#?\d+\]\s*)+", "", raw)
-    return _clean(raw, name), reply_id, rxs
+    return _clean(raw, name), reply_id, rxs, vote_num
 
 
 def _clean(text, name):
@@ -421,6 +426,76 @@ class Room:
             "system", None, "Yeni konu: " + topic if topic else "Konu serbest kaldı."
         )
 
+    def _cast_vote(self, poll_msg, index, who, toggle=False):
+        if not poll_msg or poll_msg.get("kind") != "poll":
+            return False
+        opts = poll_msg.get("options") or []
+        if index < 0 or index >= len(opts):
+            return False
+        if who in opts[index]["votes"]:
+            if toggle:
+                opts[index]["votes"].remove(who)
+            return True
+        for opt in opts:
+            if who in opt["votes"]:
+                opt["votes"].remove(who)
+        opts[index]["votes"].append(who)
+        return True
+
+    def create_poll(self, question, options):
+        question = question.strip()[:160]
+        if not question:
+            return "soru bos"
+        cleaned = []
+        seen = set()
+        for raw in options:
+            if not isinstance(raw, str):
+                continue
+            val = raw.strip()[:70]
+            key = _fold(val)
+            if val and key not in seen:
+                seen.add(key)
+                cleaned.append(val)
+            if len(cleaned) >= 4:
+                break
+        if len(cleaned) < 2:
+            return "en az iki secenek gir"
+        with self.lock:
+            uname = self.user_name or "SEN"
+        self._post(
+            "poll",
+            None,
+            question,
+            {
+                "name": uname,
+                "options": [{"text": o, "votes": []} for o in cleaned],
+            },
+        )
+        with self.lock:
+            self.last_at = min(self.last_at, time.time() - 2)
+            if not self.frozen:
+                picks = [a["id"] for a in self.live()]
+                random.shuffle(picks)
+                self.queue.clear()
+                for pid in picks:
+                    self.queue.append(pid)
+        return None
+
+    def vote_poll(self, poll_id, option):
+        try:
+            idx = int(option)
+        except (TypeError, ValueError):
+            return False
+        with self.lock:
+            msg = self._find_msg(poll_id)
+            return self._cast_vote(msg, idx, self.user_name or "SEN", toggle=True)
+
+    def _active_poll(self):
+        for msg in reversed(self.messages[-HISTORY:]):
+            if msg["kind"] == "poll":
+                return msg
+        return None
+
     def reset(self):
         with self.lock:
             self.epoch += 1
@@ -528,6 +603,20 @@ class Room:
                 "Kullanıcı sana özelden şunu yazdı, bunu aynen tekrarlama ama "
                 "davranışına yansıt: " + nudge
             )
+        poll = self._active_poll()
+        if poll:
+            voted = any(agent["name"] in o["votes"] for o in poll["options"])
+            if not voted:
+                opt_line = "  ".join(
+                    "%d) %s" % (i + 1, o["text"])
+                    for i, o in enumerate(poll["options"])
+                )
+                lines.append(
+                    'Grupta açık bir anket var: "%s" (%s). Henüz oy vermedin. '
+                    "Mesajının en başına [OY:1] gibi seçtiğin numaranın etiketini "
+                    "yazarak oyunu kullan ve neden onu seçtiğini ya da diğerlerinin "
+                    "oyuna ne dediğini kendi tarzınla söyle." % (poll["text"], opt_line)
+                )
         lines += [
             "",
             "Nasıl yazılır:",
@@ -583,6 +672,20 @@ class Room:
                 continue
             if msg["kind"] == "system":
                 rows.append("[grup] " + msg["text"])
+            elif msg["kind"] == "poll":
+                summary = " | ".join(
+                    "%d) %s (%s)"
+                    % (
+                        i + 1,
+                        o["text"],
+                        ", ".join(o["votes"]) if o["votes"] else "oy yok",
+                    )
+                    for i, o in enumerate(msg.get("options") or [])
+                )
+                rows.append(
+                    '[anket #%d] %s sordu: "%s" -> %s'
+                    % (msg["id"], msg["name"], msg["text"], summary)
+                )
             else:
                 who = uname if msg["kind"] == "user" else msg["name"]
                 rep = (
@@ -676,7 +779,7 @@ class Room:
 
         try:
             raw = providers.generate(snapshot, system, transcript)
-            text, reply_id, rxs = _parse_actions(raw, snapshot["name"])
+            text, reply_id, rxs, vote_num = _parse_actions(raw, snapshot["name"])
             if not text or _looks_meta(text):
                 raw = providers.generate(
                     snapshot,
@@ -684,9 +787,10 @@ class Room:
                     transcript + "\n\nDusunme, plan yapma, kurallari tekrarlama, "
                     "ne yazacagini anlatma. Dogrudan gruba dusecek tek mesaji yaz.",
                 )
-                text, reply_id2, rxs2 = _parse_actions(raw, snapshot["name"])
+                text, reply_id2, rxs2, vote_num2 = _parse_actions(raw, snapshot["name"])
                 reply_id = reply_id2 or reply_id
                 rxs = rxs2 or rxs
+                vote_num = vote_num2 or vote_num
                 if _looks_meta(text):
                     text = ""
             with self.lock:
@@ -702,6 +806,21 @@ class Room:
                 agent["status"] = "hazir"
                 if nudge and self.nudges.get(agent["id"]) == nudge:
                     del self.nudges[agent["id"]]
+                poll = self._active_poll()
+                if poll and not any(
+                    agent["name"] in o["votes"] for o in poll["options"]
+                ):
+                    if vote_num and 1 <= vote_num <= len(poll["options"]):
+                        self._cast_vote(poll, vote_num - 1, agent["name"])
+                    else:
+                        folded = _fold(text)
+                        hits = [
+                            i
+                            for i, o in enumerate(poll["options"])
+                            if _fold(o["text"]) in folded
+                        ]
+                        if len(hits) == 1:
+                            self._cast_vote(poll, hits[0], agent["name"])
                 for em, mid in rxs[:2]:
                     target = self._find_msg(mid)
                     if target and target.get("agent_id") != agent["id"]:
@@ -936,6 +1055,11 @@ class Room:
                     str(m["id"]): m["reactions"]
                     for m in self.messages
                     if m.get("reactions")
+                },
+                "polls": {
+                    str(m["id"]): m["options"]
+                    for m in self.messages
+                    if m["kind"] == "poll"
                 },
                 "reaction_set": list(REACTIONS),
                 "agents": agents,

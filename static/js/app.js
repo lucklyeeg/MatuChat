@@ -132,6 +132,37 @@ function syncReactions(all) {
   });
 }
 
+let pollSig = "";
+
+function renderPollOpts(box, options) {
+  box.innerHTML = "";
+  if (!options) return;
+  const me = userName || "SEN";
+  const total = options.reduce((sum, o) => sum + ((o.votes && o.votes.length) || 0), 0);
+  options.forEach((o, i) => {
+    const votes = o.votes || [];
+    const pct = total ? Math.round((votes.length / total) * 100) : 0;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "poll-opt" + (votes.includes(me) ? " mine" : "");
+    btn.dataset.pvote = i;
+    btn.innerHTML = `
+      <span class="poll-fill" style="width:${pct}%"></span>
+      <span class="poll-row"><b>${esc(o.text)}</b><i>${votes.length} oy (${pct}%)</i></span>
+      ${votes.length ? `<span class="poll-who">${esc(votes.join(", "))}</span>` : ""}`;
+    box.appendChild(btn);
+  });
+}
+
+function syncPolls(all) {
+  const sig = JSON.stringify([userName, all || {}]);
+  if (sig === pollSig) return;
+  pollSig = sig;
+  log.querySelectorAll(".poll-card[data-poll]").forEach((card) => {
+    renderPollOpts(card.querySelector(".poll-opts"), all && all[card.dataset.poll]);
+  });
+}
+
 function setReply(m) {
   replyTarget = m;
   const bar = document.getElementById("replyBar");
@@ -165,6 +196,19 @@ function renderMessage(m) {
     const el = document.createElement("div");
     el.className = "wsp";
     el.innerHTML = `<b>${esc(m.name)}</b><br>${esc(m.text)}`;
+    log.appendChild(el);
+    return;
+  }
+  if (m.kind === "poll") {
+    lastAuthor = null;
+    const el = document.createElement("div");
+    el.className = "poll-card";
+    el.dataset.poll = m.id;
+    el.innerHTML = `
+      <div class="poll-head"><span>ANKET &middot; ${esc(m.name)}</span><span class="time">${esc(m.ts)}</span></div>
+      <div class="poll-q">${esc(m.text)}</div>
+      <div class="poll-opts"></div>`;
+    renderPollOpts(el.querySelector(".poll-opts"), m.options);
     log.appendChild(el);
     return;
   }
@@ -242,6 +286,7 @@ function clearLog() {
   lastAuthor = null;
   since = 0;
   rxSig = "";
+  pollSig = "";
   msgCache.clear();
   setReply(null);
 }
@@ -295,11 +340,13 @@ async function pollOnce() {
     const fresh = data.messages.filter((m) => m.id > since);
     if (fresh.length) {
       rxSig = "";
+      pollSig = "";
       fresh.forEach(renderMessage);
       since = fresh[fresh.length - 1].id;
       if (stick) log.scrollTop = log.scrollHeight;
     }
     syncReactions(data.reactions);
+    syncPolls(data.polls);
     if (data.typing) {
       const a = findAgent(data.typing);
       typingBox.classList.remove("hidden");
@@ -666,6 +713,59 @@ function openTopic() {
   });
 }
 
+function openPollModal() {
+  openModal("ANKET AC", `
+    <div class="field">
+      <label>SORU</label>
+      <input id="pqIn" maxlength="160" placeholder="ornek: gece 3'te menemen yenir mi">
+    </div>
+    <div class="field" id="poWrap">
+      <label>SECENEKLER</label>
+      <input class="po-in" maxlength="70" placeholder="1. secenek (ornek: Evet)">
+      <input class="po-in" maxlength="70" placeholder="2. secenek (ornek: Hayir)">
+    </div>
+    <div>
+      <button class="pxbtn tiny" type="button" id="poAdd">+ SECENEK EKLE</button>
+    </div>
+    <div class="probe hidden" id="poNote"></div>
+    <div class="modal-actions">
+      <button class="pxbtn send" id="poSend">ANKETI AC</button>
+    </div>`);
+  const qIn = document.getElementById("pqIn");
+  const wrap = document.getElementById("poWrap");
+  const addBtn = document.getElementById("poAdd");
+  const note = document.getElementById("poNote");
+  const sendBtn = document.getElementById("poSend");
+  qIn.focus();
+  addBtn.onclick = () => {
+    const count = wrap.querySelectorAll(".po-in").length;
+    if (count >= 4) return;
+    const inp = document.createElement("input");
+    inp.className = "po-in";
+    inp.maxLength = 70;
+    inp.placeholder = (count + 1) + ". secenek";
+    wrap.appendChild(inp);
+    inp.focus();
+    if (count + 1 >= 4) addBtn.classList.add("hidden");
+  };
+  sendBtn.onclick = async () => {
+    const question = qIn.value.trim();
+    const options = Array.from(wrap.querySelectorAll(".po-in"))
+      .map((el) => el.value.trim())
+      .filter(Boolean);
+    sendBtn.disabled = true;
+    const res = await post("/api/poll", { question, options });
+    sendBtn.disabled = false;
+    if (!res.ok) {
+      note.className = "probe bad";
+      note.textContent = res.error || "anket acilamadi";
+      return;
+    }
+    closeModal();
+    poll();
+  };
+}
+
 function openPoke() {
   const live = agents.filter((x) => x.enabled);
   if (!live.length) {
@@ -740,11 +840,21 @@ document.getElementById("profileBtn").onclick = openProfile;
 document.querySelector(".ghead-text").onclick = openProfile;
 document.getElementById("fitneBtn").onclick = openFitne;
 document.getElementById("topicBtn").onclick = openTopic;
+document.getElementById("pollBtn").onclick = openPollModal;
 document.getElementById("pokeBtn").onclick = openPoke;
 
 document.getElementById("replyCancel").onclick = () => setReply(null);
 
 log.addEventListener("click", async (e) => {
+  const pvote = e.target.closest("[data-pvote]");
+  if (pvote) {
+    const card = pvote.closest(".poll-card");
+    if (card && card.dataset.poll) {
+      await post("/api/poll/vote", { poll_id: Number(card.dataset.poll), option: Number(pvote.dataset.pvote) });
+      poll();
+    }
+    return;
+  }
   const repBtn = e.target.closest("[data-reply]");
   if (repBtn) {
     const m = msgCache.get(Number(repBtn.dataset.reply));
