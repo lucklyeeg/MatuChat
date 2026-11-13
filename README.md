@@ -38,7 +38,7 @@ Tamamen senin bilgisayarında çalışır. Sunucu, veritabanı, hesap açma yok.
 
 **1. İndir ve çalıştır**
 
-- **Windows (kurulumsuz):** [Releases](../../releases) sayfasından **`MatuChat.exe`** dosyasını indirip çift tıkla (Python gerekmez).
+- **Windows (masaüstü kurulumu):** [Releases](../../releases) sayfasından **`MatuChat-Setup-1.3.0.exe`** dosyasını indirip kur (Python gerekmez, kendi penceresinde açılır).
 - **Windows (kaynak koddan):** `baslat.bat` dosyasına çift tıkla.
 - **macOS / Linux:** terminalde `bash baslat.sh`
 
@@ -47,7 +47,7 @@ koddan çalıştırırken Python 3.9+ gerekir, başka bir şeye ihtiyacın yok.
 
 **2. En az bir API anahtarı gir**
 
-Açılan sayfada **API AYARLARI**'na tıkla, istediğin karakteri seç, anahtarını yapıştır
+Açılan pencerede **API AYARLARI**'na tıkla, istediğin karakteri seç, anahtarını yapıştır
 ve **KAYDET**. Anahtarın yoksa aşağıdaki sağlayıcıların çoğunda ücretsiz bir kademe var
 — [Groq](https://console.groq.com) tek anahtarla dört karakteri birden açtığı için
 başlamak için en kolayı (**aynı sağlayıcıdaki diğer karakterlere de uygula** kutusunu
@@ -66,11 +66,13 @@ birbirleriyle de konuşurlar.
 ### Anahtarlarım ve sohbet geçmişi nereye gidiyor?
 
 Girdiğin ayarlar **`ayarlar.json`**, son mesajlar ise **`gecmis.json`** dosyasına
-kaydedilir (`MatuChat.exe` kullanıyorsan `.exe` dosyasının bulunduğu klasöre yazılır).
-Böylece uygulamayı kapatıp açtığında ayarların ve muhabbet kaldığı yerden devam eder.
+kaydedilir:
 
-- Dosyalar senin diskinde durur, hiçbir yere gönderilmez.
-- `.gitignore` içinde oldukları için depoya **girmezler**.
+- **Windows masaüstü kurulumunda:** `%APPDATA%\MatuChat` klasörüne yazılır (yeni sürümü
+  üzerine kurduğunda kayıtlı anahtarların ve geçmişin korunur).
+- **Kaynak koddan çalıştırırken:** proje klasörünün içine yazılır.
+- Dosyalar senin diskinde durur, hiçbir yere gönderilmez; `.gitignore` içinde oldukları
+  için depoya **girmezler**.
 - Anahtarları silmek istersen `ayarlar.json` dosyasını silmen yeterli.
 - Anahtarlar arayüzde bir daha asla geri gösterilmez (alan boş kalır).
 
@@ -92,6 +94,7 @@ adresi açar ve ekrana yazar.
 |---|---|
 | `PORT` | Başlangıç portu (varsayılan 5000) |
 | `NO_BROWSER=1` | Tarayıcıyı açma |
+| `NO_WINDOW=1` | Masaüstü sürümünde yerleşik pencere yerine tarayıcı modunu kullan |
 
 ---
 
@@ -125,9 +128,9 @@ girmen yarı dolu bir grup kurmaya yeter.
 > kendi mizahını kullan.
 
 Yani grubun havası modellerin kendi üslubundan çıkar. İstersen API AYARLARI'ndan
-karakter başına [12 hazır kişilikten](#kişilikler) birini seçebilirsin — zorbadan dost
-canlısına, saftan komplocuya. Sabit olan tek şey görsel kimlikleri: isim, renk ve elle
-çizilmiş 12×12 piksel avatar.
+karakter başına [hazır kişiliklerden](#kişilikler) birini seçebilir ya da kendi tarifini
+yazabilirsin — zorbadan dost canlısına, saftan komplocuya. Sabit olan tek şey görsel
+kimlikleri: isim, renk ve elle çizilmiş 12×12 piksel avatar.
 
 Model kimlikleri sadece birer başlangıç değeridir; hepsi arayüzden değiştirilebilir.
 Doğru kimliği ezberlemek zorunda değilsin: ayar penceresindeki **MODELLERİ GETİR**
@@ -157,8 +160,9 @@ Her karakter için beş alan:
 ### Kişilikler
 
 Varsayılan **KENDİ HÂLİ (rol yok)** — modele hiçbir karakter dayatılmaz. İstersen
-karakter başına bir kişilik seçersin ya da **ÖZEL** seçeneğiyle kendi karakter tarifini
-yazarsın; seçtiğin şey hem davranışını hem yazma stilini belirler ve kartın üstünde görünür.
+karakter başına 12 ortak kişilikten birini seçersin, GROK için ek olarak açılan **PRIME**
+modunu kullanırsın ya da **ÖZEL** seçeneğiyle kendi karakter tarifini yazarsın; seçtiğin
+şey hem davranışını hem yazma stilini belirler ve kartın üstünde görünür.
 
 | | | |
 |---|---|---|
@@ -278,9 +282,9 @@ kim" diye bakar.
 
 ### Sıradaki konuşmacı nasıl seçilir
 
-Önce sıra kuyruğuna bakılır (etiketlenenler, dürtülenler, senin mesajına cevap
-verecekler). Kuyruk boşsa ve otonom mod açıksa ağırlıklı bir seçim yapılır
-([engine.py#L356](engine.py#L356)):
+Önce sıra kuyruğuna bakılır (etiketlenenler, alıntılananlar, dürtülenler, senin mesajına
+cevap verecekler). Kuyruk boşsa ve otonom mod açıksa ağırlıklı bir seçim yapılır
+([engine.py](engine.py)):
 
 - Son yazan kişinin ağırlığı **0.12 ile çarpılır** — üst üste konuşmasın diye
 - Son 12 mesajdır susan biri her mesaj için **%18 daha olası** hale gelir
@@ -288,8 +292,11 @@ verecekler). Kuyruk boşsa ve otonom mod açıksa ağırlıklı bir seçim yapı
 
 ### Muhabbet nasıl akar
 
-- Sen yazınca en fazla 3 karakter sıraya girer; etiketlediklerin listenin başına geçer
+- Sen yazınca en fazla 3 karakter sıraya girer; etiketlediklerin ve mesajını
+  alıntıladığın karakter listenin başına geçer
 - Bir mesajda `@İSİM` geçerse o kişi sıraya alınır ve cevap verir
+- Anket açıldığında gruptaki aktif karakterler sıraya girer, oy kullanır ve seçimleri
+  üzerinden tartışır
 - Zincir bittiğinde `%45 + gerginlik×%12` ihtimalle rastgele biri lafa girer
 - Kuyruktaki mesajlar arasında en az **1.8 saniye** beklenir, doğal bir ritim olsun diye
 - Elle bir konu açılmamışsa ve senden mesaj gelmeden 8+ mesaj geçtiyse, `%40` ihtimalle
@@ -299,26 +306,31 @@ verecekler). Kuyruk boşsa ve otonom mod açıksa ağırlıklı bir seçim yapı
 
 ### Modele ne gönderiliyor
 
-Her istekte iki parça gider:
+Her istekte iki parça (varsa son atılan fotoğrafla birlikte) gider:
 
-1. **Sistem talimatı** — kim olduğu, grupta kimlerin olduğu, buranın tartışma odası
-   değil sıradan bir arkadaş grubu olduğu, gerginlik seviyesi, varsa konu ve sana özel
-   fısıltı, bir de yazım kuralları (Türkçe, çoğunlukla küçük harf, kısa cümle, noktalama
-   takıntısı yok, asistan gibi konuşma, `@İSİM` ile birine dön)
-2. **Son 24 mesajın dökümü** — `İSİM: mesaj` biçiminde, sonunda "sıradaki mesajı sen
-   yazıyorsun" satırı
+1. **Sistem talimatı** — kim olduğu, oda adı ve senin adın, seçili kişilik ya da özel
+   karakter tarifi, grupta kimlerin olduğu, gerginlik seviyesi, varsa konu, açık anket ve
+   sana özel fısıltı, bir de yazım kuralları (Türkçe, çoğunlukla küçük harf, kısa cümle,
+   asistan gibi konuşma, `@İSİM` ile birine dön, gerekirse `[#id]` ile yanıtla veya
+   `{😂:#id}` ile tepki bırak)
+2. **Son 24 mesajın dökümü** — mesaj numaraları, alıntılar, tepkiler ve açık anket
+   durumuyla birlikte `İSİM: mesaj` biçiminde, sonunda "sıradaki mesajı sen yazıyorsun"
+   satırı
 
-Gelen cevap temizlenir: baştaki `İSİM:` öneki, sarmalayan tırnaklar ve parantezli
-sahne notları atılır, 420 karakteri geçerse cümle sonundan kesilir.
+Gelen cevap temizlenir: baştaki `İSİM:` öneki, sarmalayan tırnaklar ve parantezli sahne
+notları atılır; varsa anket oyu (`[OY:1]`), mesaj alıntısı (`[#12]`) ve emoji tepkisi
+ayıklanıp işlenir, metin 420 karakteri geçerse cümle sonundan kesilir.
 
 ### İstek ayrıntıları
 
 Üç istek biçimi var ([providers.py](providers.py)): Anthropic Messages API, Google
 `generateContent` ve OpenAI uyumlu `chat/completions`. Hepsinde `max_tokens` 800,
-sıcaklık 1.0, zaman aşımı 40 saniye.
+sıcaklık 1.0, zaman aşımı 40 saniye. Yakın zamanda gruba fotoğraf atıldıysa görsel verisi
+sağlayıcının kendi biçiminde isteğe eklenir; model görsel girişi desteklemiyorsa (HTTP
+400/422) istek kendiliğinden metin olarak tekrar gönderilir.
 
-Arayüz sunucuyu **1.2 saniyede bir** yoklar (`/api/state?since=`), sadece yeni mesajları
-alır.
+Arayüz sunucuyu **1.2 saniyede bir** yoklar (`/api/state?since=`), sadece değişen durumu
+ve yeni mesajları alır.
 
 ---
 
@@ -478,8 +490,8 @@ klasörleri dışarıda kalır. Depoyu açmadan önce şunlara bak:
 - Tek kullanıcılık, tek gruplu bir oyuncak. Kimlik doğrulama yok, veritabanı yok; son
   120 mesaj yerel `gecmis.json` dosyasında tutulur (**SOHBETİ TEMİZLE** ile sıfırlanır).
   Dışarı açma.
-- Her mesaj bir API isteği demektir. Hızlı tempo + beş karakter = ciddi token tüketimi;
-  ücretli anahtarlarla oynarken tempoyu düşük tutmakta fayda var.
+- Her mesaj bir API isteği demektir. Hızlı tempo + çok sayıda karakter = ciddi token
+  tüketimi; ücretli anahtarlarla oynarken tempoyu düşük tutmakta fayda var.
 - Model kimlikleri zamanla değişir; koddaki değerler sadece başlangıç noktasıdır.
   Bir karakter `model bulunamadi` diyorsa **MODELLERİ GETİR** ile güncel listeyi çekip
   seçmen yeterli, kodda değişiklik gerekmez.
