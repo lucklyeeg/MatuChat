@@ -8,11 +8,14 @@ const dramaBar = document.getElementById("dramaBar");
 const autoBtn = document.getElementById("autoBtn");
 const tempoBtn = document.getElementById("tempoBtn");
 const webBtn = document.getElementById("webBtn");
+const soundBtn = document.getElementById("soundBtn");
 const overlay = document.getElementById("overlay");
 const modalTitle = document.getElementById("modalTitle");
 const modalBody = document.getElementById("modalBody");
 const sayForm = document.getElementById("sayForm");
 const sayInput = document.getElementById("sayInput");
+const imgInput = document.getElementById("imgInput");
+const atMenu = document.getElementById("atMenu");
 
 const TEMPOS = ["yavas", "normal", "hizli"];
 const PROVIDERS = [
@@ -30,6 +33,7 @@ const PROVIDERS = [
 
 let since = 0;
 let epoch = null;
+let booted = false;
 let lastAuthor = null;
 let agents = [];
 let bases = {};
@@ -38,18 +42,107 @@ let rosterSig = "";
 let tempo = "normal";
 let drama = 1;
 let web = true;
+let sound = true;
 let auto = true;
 let frozen = false;
 let groupName = "ORTAK ODA";
 let userName = "";
 let currentTopic = "";
 let replyTarget = null;
+let pendingImage = null;
 let reactionSet = ["😂", "💀", "🔥", "👍", "👎", "👀", "❤️", "🤡"];
 let rxSig = "";
+let audioCtx = null;
+let atItems = [];
+let atIndex = 0;
+let atRange = null;
 const msgCache = new Map();
 
 function esc(s) {
   return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+function foldTr(s) {
+  return String(s)
+    .replace(/[Çç]/g, "c")
+    .replace(/[Ğğ]/g, "g")
+    .replace(/[İıI]/g, "i")
+    .replace(/[Öö]/g, "o")
+    .replace(/[Şş]/g, "s")
+    .replace(/[Üü]/g, "u")
+    .toLowerCase();
+}
+
+function blip(freq) {
+  if (!sound) return;
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    if (!audioCtx) audioCtx = new Ctx();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    const now = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = "square";
+    osc.frequency.setValueAtTime(freq || 520, now);
+    osc.frequency.setValueAtTime((freq || 520) * 1.25, now + 0.03);
+    gain.gain.setValueAtTime(0.035, now);
+    gain.gain.exponentialRampToValueAtTime(0.0008, now + 0.07);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start(now);
+    osc.stop(now + 0.075);
+  } catch (e) {}
+}
+
+function setImage(dataUrl) {
+  pendingImage = dataUrl || null;
+  const bar = document.getElementById("imgBar");
+  const thumb = document.getElementById("imgThumb");
+  if (!pendingImage) {
+    bar.classList.add("hidden");
+    thumb.removeAttribute("src");
+    imgInput.value = "";
+    return;
+  }
+  thumb.src = pendingImage;
+  bar.classList.remove("hidden");
+}
+
+function readImageFile(file) {
+  if (!file || !file.type || !file.type.startsWith("image/")) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      const maxSide = 800;
+      let w = img.width;
+      let h = img.height;
+      if (w > maxSide || h > maxSide) {
+        if (w >= h) {
+          h = Math.max(1, Math.round((h * maxSide) / w));
+          w = maxSide;
+        } else {
+          w = Math.max(1, Math.round((w * maxSide) / h));
+          h = maxSide;
+        }
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, w, h);
+      const out = canvas.toDataURL("image/jpeg", 0.82);
+      if (out.length > 1200000) {
+        statusText.textContent = "gorsel cok buyuk";
+        return;
+      }
+      setImage(out);
+      sayInput.focus();
+    };
+    img.src = reader.result;
+  };
+  reader.readAsDataURL(file);
 }
 
 function highlight(text) {
@@ -170,8 +263,9 @@ function setReply(m) {
     bar.classList.add("hidden");
     return;
   }
+  const preview = m.text || (m.image ? "[fotoğraf]" : "");
   document.getElementById("replyText").innerHTML =
-    `<b>${esc(m.name)}:</b> ${esc((m.text || "").slice(0, 80))}`;
+    `<b>${esc(m.name)}:</b> ${esc(preview.slice(0, 80))}`;
   bar.classList.remove("hidden");
   sayInput.focus();
 }
@@ -220,13 +314,16 @@ function renderMessage(m) {
   const chained = author === lastAuthor && !m.reply_to;
   lastAuthor = author;
   const acts = `<span class="macts"><button type="button" class="mact" data-reply="${m.id}" title="Yanitla">&#8617;</button><button type="button" class="mact" data-rxmenu="${m.id}" title="Tepki">+</button></span>`;
+  const imgHtml = m.image ? `<img class="chat-img" src="${esc(m.image)}" alt="fotograf">` : "";
+  const bodyHtml = m.text ? `<div class="body">${highlight(m.text)}</div>` : "";
   if (m.kind === "user") {
     row.className = "row me" + (chained ? " cont" : "");
     row.innerHTML = `
       <div class="bubble">
         <div class="head"><span>${esc(m.name || userName || "SEN")}</span>${acts}<span class="time">${esc(m.ts)}<span class="tick">&#10003;&#10003;</span></span></div>
         ${quoteHtml(m.reply_to)}
-        <div class="body">${highlight(m.text)}</div>
+        ${imgHtml}
+        ${bodyHtml}
         <div class="rx-picker hidden"></div>
         <div class="rx-row" data-rx="${m.id}"></div>
       </div>`;
@@ -245,7 +342,8 @@ function renderMessage(m) {
       <div class="bubble" style="border-left-color:${esc(m.color)}">
         ${head}
         ${quoteHtml(m.reply_to)}
-        <div class="body">${highlight(m.text)}</div>
+        ${imgHtml}
+        ${bodyHtml}
         <div class="rx-picker hidden"></div>
         <div class="rx-row" data-rx="${m.id}"></div>
       </div>`;
@@ -335,6 +433,7 @@ async function pollOnce() {
     groupName = data.group || "ORTAK ODA";
     userName = data.user_name || "";
     currentTopic = data.topic || "";
+    sound = data.sound !== false;
     renderRoster();
     const stick = atBottom();
     const fresh = data.messages.filter((m) => m.id > since);
@@ -344,7 +443,11 @@ async function pollOnce() {
       fresh.forEach(renderMessage);
       since = fresh[fresh.length - 1].id;
       if (stick) log.scrollTop = log.scrollHeight;
+      if (booted && fresh.some((m) => m.kind === "agent")) {
+        blip(520);
+      }
     }
+    booted = true;
     syncReactions(data.reactions);
     syncPolls(data.polls);
     if (data.typing) {
@@ -370,6 +473,8 @@ async function pollOnce() {
     web = data.web !== false;
     webBtn.textContent = "INTERNET: " + (web ? "ACIK" : "KAPALI");
     webBtn.classList.toggle("hot", !web);
+    soundBtn.textContent = "SES: " + (sound ? "ACIK" : "KAPALI");
+    soundBtn.classList.toggle("hot", !sound);
     renderDrama();
     topicLine.textContent = currentTopic ? "konu: " + currentTopic : "konu serbest";
     document.getElementById("groupName").textContent = groupName;
@@ -792,12 +897,53 @@ agentList.addEventListener("click", (e) => {
   if (btn) openSettings(btn.dataset.cfg);
 });
 
+function hideAtMenu() {
+  atItems = [];
+  atRange = null;
+  atMenu.classList.add("hidden");
+  atMenu.innerHTML = "";
+}
+
+function renderAtMenu() {
+  if (!atItems.length) {
+    hideAtMenu();
+    return;
+  }
+  atMenu.innerHTML = atItems
+    .map(
+      (a, idx) =>
+        `<button type="button" class="at-item ${idx === atIndex ? "on" : ""}" data-atpick="${idx}"><b style="color:${esc(a.color)}">@${esc(a.name)}</b><i>${esc(a.provider_label)}</i></button>`
+    )
+    .join("");
+  atMenu.classList.remove("hidden");
+}
+
+function applyAtPick(idx) {
+  const picked = atItems[idx];
+  if (!picked || !atRange) return;
+  const val = sayInput.value;
+  const before = val.slice(0, atRange[0]);
+  const after = val.slice(atRange[1]);
+  const insert = "@" + picked.name + " ";
+  sayInput.value = before + insert + after.replace(/^\s+/, "");
+  const pos = (before + insert).length;
+  sayInput.setSelectionRange(pos, pos);
+  hideAtMenu();
+  sayInput.focus();
+}
+
 document.getElementById("modalClose").onclick = closeModal;
 overlay.addEventListener("click", (e) => {
   if (e.target === overlay) closeModal();
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") closeModal();
+  if (e.key === "Escape") {
+    if (!atMenu.classList.contains("hidden")) {
+      hideAtMenu();
+      return;
+    }
+    closeModal();
+  }
 });
 
 document.getElementById("freezeBtn").onclick = async () => {
@@ -815,6 +961,14 @@ webBtn.onclick = async () => {
   poll();
 };
 
+soundBtn.onclick = async () => {
+  const next = !sound;
+  sound = next;
+  if (next) blip(660);
+  await post("/api/control", { sound: next });
+  poll();
+};
+
 tempoBtn.onclick = async () => {
   const next = TEMPOS[(TEMPOS.indexOf(tempo) + 1) % TEMPOS.length];
   await post("/api/control", { tempo: next });
@@ -828,6 +982,15 @@ document.querySelectorAll("[data-drama]").forEach((btn) => {
     poll();
   };
 });
+
+document.getElementById("exportBtn").onclick = () => {
+  const a = document.createElement("a");
+  a.href = "/api/export";
+  a.download = "matuchat-sohbet.txt";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+};
 
 document.getElementById("resetBtn").onclick = async () => {
   const res = await post("/api/reset");
@@ -844,8 +1007,90 @@ document.getElementById("pollBtn").onclick = openPollModal;
 document.getElementById("pokeBtn").onclick = openPoke;
 
 document.getElementById("replyCancel").onclick = () => setReply(null);
+document.getElementById("imgBtn").onclick = () => imgInput.click();
+document.getElementById("imgCancel").onclick = () => setImage(null);
+imgInput.addEventListener("change", () => {
+  if (imgInput.files && imgInput.files[0]) readImageFile(imgInput.files[0]);
+});
+
+document.addEventListener("paste", (e) => {
+  if (!overlay.classList.contains("hidden")) return;
+  const items = (e.clipboardData && e.clipboardData.items) || [];
+  for (let i = 0; i < items.length; i++) {
+    if (items[i].type && items[i].type.startsWith("image/")) {
+      e.preventDefault();
+      readImageFile(items[i].getAsFile());
+      return;
+    }
+  }
+});
+
+const stageEl = document.querySelector(".stage");
+stageEl.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  stageEl.classList.add("dragover");
+});
+stageEl.addEventListener("dragleave", (e) => {
+  if (!stageEl.contains(e.relatedTarget)) stageEl.classList.remove("dragover");
+});
+stageEl.addEventListener("drop", (e) => {
+  e.preventDefault();
+  stageEl.classList.remove("dragover");
+  const files = (e.dataTransfer && e.dataTransfer.files) || [];
+  if (files[0] && files[0].type && files[0].type.startsWith("image/")) {
+    readImageFile(files[0]);
+  }
+});
+
+sayInput.addEventListener("input", () => {
+  const pos = sayInput.selectionStart || 0;
+  const head = sayInput.value.slice(0, pos);
+  const m = head.match(/(^|\s)@([A-Za-z0-9ÇĞİÖŞÜçğıöşü-]*)$/);
+  if (!m) {
+    hideAtMenu();
+    return;
+  }
+  const q = foldTr(m[2]);
+  const pool = agents.some((a) => a.enabled) ? agents.filter((a) => a.enabled) : agents;
+  atItems = pool.filter((a) => foldTr(a.name).startsWith(q)).slice(0, 6);
+  atIndex = 0;
+  atRange = [pos - m[2].length - 1, pos];
+  renderAtMenu();
+});
+
+sayInput.addEventListener("keydown", (e) => {
+  if (atMenu.classList.contains("hidden") || !atItems.length) return;
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    atIndex = (atIndex + 1) % atItems.length;
+    renderAtMenu();
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    atIndex = (atIndex - 1 + atItems.length) % atItems.length;
+    renderAtMenu();
+  } else if (e.key === "Tab" || e.key === "Enter") {
+    e.preventDefault();
+    applyAtPick(atIndex);
+  }
+});
+
+sayInput.addEventListener("blur", () => {
+  setTimeout(hideAtMenu, 140);
+});
+
+atMenu.addEventListener("mousedown", (e) => {
+  const btn = e.target.closest("[data-atpick]");
+  if (!btn) return;
+  e.preventDefault();
+  applyAtPick(Number(btn.dataset.atpick));
+});
 
 log.addEventListener("click", async (e) => {
+  const pic = e.target.closest(".chat-img");
+  if (pic) {
+    openModal("FOTOGRAF", `<img class="modal-img" src="${esc(pic.getAttribute("src") || "")}" alt="">`);
+    return;
+  }
   const pvote = e.target.closest("[data-pvote]");
   if (pvote) {
     const card = pvote.closest(".poll-card");
@@ -909,11 +1154,14 @@ log.addEventListener("click", async (e) => {
 sayForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const text = sayInput.value.trim();
-  if (!text) return;
+  const image = pendingImage;
+  if (!text && !image) return;
   const reply_to = replyTarget ? replyTarget.id : null;
   sayInput.value = "";
+  hideAtMenu();
   setReply(null);
-  await post("/api/say", { text, reply_to });
+  setImage(null);
+  await post("/api/say", { text, reply_to, image });
   poll();
 });
 

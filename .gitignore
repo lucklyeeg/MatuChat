@@ -1,7 +1,11 @@
 ayarlar.json
+gecmis.json
 .env
 
 __pycache__/
+build/
+dist/
+*.spec
 *.py[cod]
 *.egg-info/
 .venv/

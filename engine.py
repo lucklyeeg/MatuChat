@@ -171,11 +171,12 @@ REACTIONS = ("😂", "💀", "🔥", "👍", "👎", "👀", "❤️", "🤡")
 def _quote_dict(msg):
     if not msg or msg["kind"] not in ("user", "agent"):
         return None
+    label = msg.get("text") or ("[fotoğraf]" if msg.get("image") else "")
     return {
         "id": msg["id"],
         "name": msg["name"],
         "color": msg["color"],
-        "text": (msg.get("text") or "")[:90],
+        "text": label[:90],
     }
 
 
@@ -269,6 +270,7 @@ class Room:
         except (TypeError, ValueError):
             self.drama = 1
         self.web = bool(saved_room.get("web", True))
+        self.sound = bool(saved_room.get("sound", True))
         self.group_name = str(saved_room.get("group_name") or "").strip()[:40] or GROUP_NAME
         self.user_name = str(saved_room.get("user_name") or "").strip()[:24]
         self.epoch = int(time.time() * 1000)
@@ -278,22 +280,29 @@ class Room:
         self.typing = None
         self.last_at = time.time()
         self.gap = 6.0
+        hist = store.load_history()
+        if hist:
+            self.messages = hist
+            self.seq = max(m["id"] for m in hist)
+        else:
+            self._post(
+                "system",
+                None,
+                "Bu Flask uygulaması lucklyeeg tarafından Batu Matu'nun videosu için "
+                "yapılmıştır.",
+                persist=False,
+            )
+            self._post(
+                "system",
+                None,
+                "Grup kuruldu. Karakterlerin AYAR menüsünden API anahtarlarını gir, "
+                "anahtarı olan herkes gruba katılır.",
+                persist=False,
+            )
         self.worker = threading.Thread(target=self._loop, daemon=True)
         self.worker.start()
-        self._post(
-            "system",
-            None,
-            "Bu Flask uygulaması lucklyeeg tarafından Batu Matu'nun videosu için "
-            "yapılmıştır.",
-        )
-        self._post(
-            "system",
-            None,
-            "Grup kuruldu. Karakterlerin AYAR menüsünden API anahtarlarını gir, "
-            "anahtarı olan herkes gruba katılır.",
-        )
 
-    def _post(self, kind, agent, text, meta=None):
+    def _post(self, kind, agent, text, meta=None, persist=True):
         with self.lock:
             self.seq += 1
             uname = self.user_name or "SEN"
@@ -311,6 +320,8 @@ class Room:
             self.messages.append(msg)
             if len(self.messages) > 400:
                 self.messages = self.messages[-300:]
+            if persist:
+                store.save_history(self.messages)
             return msg
 
     def _find_msg(self, msg_id):
@@ -345,7 +356,10 @@ class Room:
     def react(self, msg_id, emoji):
         with self.lock:
             msg = self._find_msg(msg_id)
-            return self._set_reaction(msg, emoji, self.user_name or "SEN", toggle=True)
+            ok = self._set_reaction(msg, emoji, self.user_name or "SEN", toggle=True)
+            if ok:
+                store.save_history(self.messages)
+            return ok
 
     def live(self):
         return [a for a in self.agents.values() if a["enabled"]]
@@ -353,15 +367,26 @@ class Room:
     def _mentions(self, text):
         return [a["id"] for a in self.live() if _names_in(text, a["name"])]
 
-    def user_says(self, text, reply_to=None):
-        text = text.strip()[:600]
-        if not text:
+    def user_says(self, text, reply_to=None, image=None):
+        text = (text or "").strip()[:600]
+        img = (
+            image
+            if isinstance(image, str)
+            and image.startswith("data:image/")
+            and len(image) <= 1200000
+            else None
+        )
+        if not text and not img:
             return
         with self.lock:
             ref = self._find_msg(reply_to)
             quote = _quote_dict(ref)
-            meta = {"reply_to": quote} if quote else None
-        self._post("user", None, text, meta)
+            meta = {}
+            if quote:
+                meta["reply_to"] = quote
+            if img:
+                meta["image"] = img
+        self._post("user", None, text, meta or None)
         with self.lock:
             self.last_at = time.time()
             if self.frozen:
@@ -488,12 +513,21 @@ class Room:
             return False
         with self.lock:
             msg = self._find_msg(poll_id)
-            return self._cast_vote(msg, idx, self.user_name or "SEN", toggle=True)
+            ok = self._cast_vote(msg, idx, self.user_name or "SEN", toggle=True)
+            if ok:
+                store.save_history(self.messages)
+            return ok
 
     def _active_poll(self):
         for msg in reversed(self.messages[-HISTORY:]):
             if msg["kind"] == "poll":
                 return msg
+        return None
+
+    def _recent_image(self):
+        for msg in reversed(self.messages[-6:]):
+            if msg.get("image"):
+                return msg["image"]
         return None
 
     def reset(self):
@@ -573,12 +607,26 @@ class Room:
                 "bir şey kaldıysa üstünde kalmaya devam et."
             )
         acilan = None
+        acilan_img = False
         for msg in reversed(self.messages[-6:]):
             if msg["kind"] == "user":
                 acilan = msg["text"]
+                acilan_img = bool(msg.get("image"))
                 break
         sessiz = self._stale()
-        if acilan:
+        if acilan_img:
+            if acilan:
+                lines.append(
+                    '%s gruba bir fotoğraf attı ve şunu yazdı: "%s". Fotoğrafta '
+                    "gördüğün şeye ve yazdığına kendi tarzınla karşılık ver."
+                    % (uname, acilan[:160])
+                )
+            else:
+                lines.append(
+                    "%s gruba bir fotoğraf attı. Fotoğrafta gördüğün şeye kendi "
+                    "tarzınla yorum yap, şaka yap ya da soru sor." % uname
+                )
+        elif acilan:
             lines.append(
                 'Grupta şu an %s şunu attı ve bunun üstüne konuşuluyor: "%s". '
                 "Buna kendi tarzınla karşılık ver: fikrini söyle, şaka yap, bir "
@@ -693,6 +741,9 @@ class Room:
                     if msg.get("reply_to")
                     else ""
                 )
+                msg_text = msg.get("text") or ""
+                if msg.get("image"):
+                    msg_text = ("[fotoğraf] " + msg_text).strip()
                 rx = ""
                 if msg.get("reactions"):
                     parts = [
@@ -702,7 +753,7 @@ class Room:
                     ]
                     if parts:
                         rx = " [tepki: " + " ".join(parts) + "]"
-                rows.append("[#%d] %s%s: %s%s" % (msg["id"], who, rep, msg["text"], rx))
+                rows.append("[#%d] %s%s: %s%s" % (msg["id"], who, rep, msg_text, rx))
         body = "\n".join(rows) if rows else "[grup] Grup yeni kuruldu, kimse yazmadı."
         return (
             body
@@ -774,11 +825,12 @@ class Room:
             nudge = self.nudges.get(agent["id"])
             system = self._system_prompt(agent)
             transcript = self._transcript(agent)
+            recent_img = self._recent_image()
             snapshot = dict(agent)
             snapshot["web"] = self.web
 
         try:
-            raw = providers.generate(snapshot, system, transcript)
+            raw = providers.generate(snapshot, system, transcript, image=recent_img)
             text, reply_id, rxs, vote_num = _parse_actions(raw, snapshot["name"])
             if not text or _looks_meta(text):
                 raw = providers.generate(
@@ -786,6 +838,7 @@ class Room:
                     system,
                     transcript + "\n\nDusunme, plan yapma, kurallari tekrarlama, "
                     "ne yazacagini anlatma. Dogrudan gruba dusecek tek mesaji yaz.",
+                    image=recent_img,
                 )
                 text, reply_id2, rxs2, vote_num2 = _parse_actions(raw, snapshot["name"])
                 reply_id = reply_id2 or reply_id
@@ -898,6 +951,7 @@ class Room:
                 "tempo": self.tempo,
                 "drama": self.drama,
                 "web": self.web,
+                "sound": self.sound,
                 "group_name": self.group_name,
                 "user_name": self.user_name,
             }
@@ -1003,11 +1057,72 @@ class Room:
                     pass
             if "web" in data:
                 self.web = bool(data["web"])
+            if "sound" in data:
+                self.sound = bool(data["sound"])
             if "group_name" in data and isinstance(data["group_name"], str):
                 self.group_name = data["group_name"].strip()[:40] or GROUP_NAME
             if "user_name" in data and isinstance(data["user_name"], str):
                 self.user_name = data["user_name"].strip()[:24]
         self._persist()
+
+    def export_text(self):
+        with self.lock:
+            gname = self.group_name
+            uname = self.user_name or "SEN"
+            msgs = list(self.messages)
+        lines = [
+            "%s - Sohbet Kaydi (%s)" % (gname, time.strftime("%Y-%m-%d %H:%M")),
+            "=" * 44,
+            "",
+        ]
+        for msg in msgs:
+            ts = msg.get("ts") or "--:--"
+            kind = msg.get("kind")
+            if kind == "system":
+                lines.append("[%s] * %s" % (ts, msg.get("text", "")))
+            elif kind == "whisper":
+                lines.append(
+                    "[%s] (%s) %s"
+                    % (ts, msg.get("name", "OZEL"), msg.get("text", ""))
+                )
+            elif kind == "poll":
+                lines.append(
+                    "[%s] [ANKET - %s] %s"
+                    % (ts, msg.get("name", uname), msg.get("text", ""))
+                )
+                for opt in msg.get("options") or []:
+                    votes = opt.get("votes") or []
+                    voters = " (%s)" % ", ".join(votes) if votes else ""
+                    lines.append(
+                        "    - %s: %d oy%s"
+                        % (opt.get("text", ""), len(votes), voters)
+                    )
+            else:
+                who = (
+                    (msg.get("name") or uname)
+                    if kind == "user"
+                    else msg.get("name", "?")
+                )
+                rep = (
+                    " (-> %s)" % msg["reply_to"]["name"]
+                    if msg.get("reply_to")
+                    else ""
+                )
+                body = msg.get("text", "")
+                if msg.get("image"):
+                    body = ("[fotoğraf] " + body).strip()
+                rx = ""
+                if msg.get("reactions"):
+                    parts = [
+                        "%s %s" % (em, ",".join(us))
+                        for em, us in msg["reactions"].items()
+                        if us
+                    ]
+                    if parts:
+                        rx = "  [" + " | ".join(parts) + "]"
+                lines.append("[%s] %s%s: %s%s" % (ts, who, rep, body, rx))
+        lines.append("")
+        return "\n".join(lines)
 
     def snapshot(self, since):
         with self.lock:
@@ -1069,5 +1184,6 @@ class Room:
                 "tempo": self.tempo,
                 "drama": self.drama,
                 "web": self.web,
+                "sound": self.sound,
                 "topic": self.topic,
             }
